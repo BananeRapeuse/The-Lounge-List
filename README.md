@@ -20,25 +20,41 @@
 
 ## 📦 Installation Rapide
 
-### Option 1 : Homelab (Recommandé) 💻
+### ⚠️ Important : GitHub Pages n'est PAS supporté !
+
+GitHub Pages ne supporte **pas PHP nativement**. Utilisez plutôt :
+- Votre **homelab** (Docker ou PHP natif) - Recommandé ✅
+- Un **hébergement traditionnel** (Hostinger, OVH, etc.)
+- Docker sur Windows/Linux/Mac avec WSL2
+
+### Option 1 : Homelab avec Docker (Recommandé) 💻
 
 ```bash
-# 1. Installer PHP 8.1+ et MySQL/MariaDB sur votre homelab
-#    - Docker : docker run -d --name the-lounge-list \
-#      -p 80:80 php:8.1-apache
-#    - Ou natif selon votre distribution
+# Étape 1 : Préparer l'environnement
+mkdir -p /var/docker/the-lounge-list
+cd /var/docker/the-lounge-list
 
-# 2. Créer une base de données MySQL/MariaDB
-#    CREATE DATABASE the_lounge_list CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+# Étape 2 : Clonez ce dépôt ou copiez manuellement les fichiers
+git clone https://github.com/votre-username/The-Lounge-List.git .
 
-# 3. Copier ce projet dans le dossier web root
-#    cp -r /chemin/vers/The-Lounge-List/* /var/www/html/the-lounge-list/
+# Étape 3 : Configurer les variables d'environnement
+cp .env.example .env
+nano .env  # Modifier DB_HOST, DB_NAME, etc. (voir .env.example)
 
-# 4. Accéder à l'interface d'installation
-#    http://votre-homelab.local/setup.php
+# Étape 4 : Créer docker-compose.yml (voir GUIDE_DEPLOIEMENT.md ou INSTALLATION.md)
+
+# Étape 5 : Lancer les conteneurs
+docker-compose up -d
+
+# Étape 6 : Accéder à l'interface d'installation
+http://votre-ip-local:8080/setup.php
 ```
 
-### Option 2 : Hosting traditionnel
+### Option 2 : Homelab sans Docker (PHP natif)
+
+Voir [INSTALLATION.md](./INSTALLATION.md) pour les instructions détaillées.
+
+### Option 3 : Hébergement traditionnel (Hostinger, OVH, etc.)
 
 1. Téléchargez ce projet sur votre hébergement
 2. Créez une base de données MySQL dans votre panneau d'hébergement
@@ -47,7 +63,15 @@
 
 ## 🔧 Configuration
 
-### Variables importantes (config.php)
+### 📖 Documentation Complète
+
+| Fichier | Description |
+|---------|-------------|
+| [INSTALLATION.md](./INSTALLATION.md) | Guide d'installation rapide (5 minutes !) |
+| [GUIDE_DEPLOIEMENT.md](./GUIDE_DEPLOIEMENT.md) | Guide complet étape par étape avec Docker et natif |
+| `.env.example` | Modèle de variables d'environnement avec commentaires détaillés |
+
+### Variables importantes (config.php - généré automatiquement)
 
 | Variable | Description | Valeur par défaut |
 |----------|-------------|-------------------|
@@ -66,25 +90,30 @@ Le projet utilise MySQL/MariaDB avec les tables suivantes :
 - **level_comments** : Commentaires sur les niveaux
 - **discord_*** : Configuration Discord (optionnel)
 
-### reCAPTCHA - Désactivation facile 🔒
+### reCAPTCHA v2 - Désactivable Facilement !
 
-Pour désactiver reCAPTCHA sans modifier le code :
+**Déjà implémenté !** Dans `setup.php`, vous verrez une checkbox :
 
-1. Ouvrez `config.php` (généré par setup.php)
-2. Modifiez ces lignes :
-   ```php
-   'security' => [
-       'captcha_enabled' => false,  // Désactive tout reCAPTCHA
-       'setup_captcha_enabled' => false,
-       // ... autres options
-   ],
+> [ ] **Désactiver Google reCAPTCHA**
+
+- ✅ **Décochez** = reCAPTCHA activé (protection anti-spam)
+- ✅ **Cochez** = reCAPTCHA désactivé (pour débuter sans configuration)
+
+Pour réactiver plus tard, ajoutez simplement vos clés reCAPTCHA :
+
+1. Allez sur https://www.google.com/recaptcha/admin
+2. Créez un nouveau site avec votre domaine
+3. Collez les clés dans `.env` ou `config.php` :
+   ```bash
+   RECAPTCHA_SITE_KEY=votre_clé_site_ici
+   RECAPTCHA_SECRET_KEY=votre_clé_secrète_ici
    ```
 
-### E-mail/Vérification - Configuration SMTP 📧
+**Par défaut, reCAPTCHA est désactivé pour faciliter l'installation initiale.**
 
-Pour activer la vérification par e-mail :
+### E-mail/Vérification SMTP - Activable via Checkbox !
 
-1. Configurez votre serveur SMTP dans `config.php` :
+Pour activer la vérification par e-mail, cochez simplement la case dans `setup.php` lors de l'installation. Ensuite, configurez votre serveur SMTP :
    ```php
    'email' => [
        'enabled' => true,           // Activer l'e-mail
@@ -116,17 +145,17 @@ Pour activer les notifications Discord plus tard :
    ],
    ```
 
-## 🌐 Langues disponibles
+## 🌐 Langues disponibles (15+)
 
-Le projet supporte 15+ langues :
+Le projet supporte de nombreuses langues :
 
-- 🇫🇷 Français (`lang/fr.php`)
-- 🇬🇧 Anglais (`lang/en.php`) - Par défaut
+- 🇫🇷 **Français** (`lang/fr.php`) - Par défaut si sélectionné lors de l'installation
+- 🇬🇧 Anglais (`lang/en.php`)
 - 🇩🇪 Allemand (`lang/de.php`)
 - 🇯🇵 Japonais (`lang/jp.php`)
-- Et bien d'autres...
+- Et bien d'autres (cn, du, id, it, kr, pl, pt, ru, sp, tr, ua, vi...)
 
-Pour ajouter une langue : Copiez `lang/en.php`, renommez-le, et traduisez les valeurs.
+Pour ajouter une langue : Copiez `lang/en.php`, renommez-le avec le code ISO (ex: `lang/ar.php`), et traduisez les valeurs.
 
 ## 🔐 Sécurité par défaut
 
@@ -161,4 +190,13 @@ Voir fichier `LICENSE` pour les détails de la licence.
 
 ---
 
-**Besoin d'aide ?** Consultez le fichier [GUIDE_DEPLOIEMENT.md](./GUIDE_DEPLOIEMENT.md) pour des instructions détaillées étape par étape !
+<div align="center">
+  <strong>🎮 The Lounge List - La plateforme de classement Geometry Dash</strong><br>
+  <small>Inspirée de Pointercrate, construite avec ❤️ et PHP</small><br><br>
+  <a href="./INSTALLATION.md"><strong>🚀 Installer maintenant →</strong></a> | 
+  <a href="./GUIDE_DEPLOIEMENT.md"><strong>📖 Documentation complète →</strong></a>
+</div>
+
+---
+
+**Besoin d'aide ?** Consultez [INSTALLATION.md](./INSTALLATION.md) pour installer en 5 minutes !
