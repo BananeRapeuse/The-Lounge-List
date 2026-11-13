@@ -1,0 +1,23 @@
+# Configuration (ne jamais committer !)
+config.php
+.env
+
+# Fichiers de cache et logs temporaires
+*.log
+cache/
+tmp/
+
+# IDE et éditeurs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Système d'exploitation Windows/Docker
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# Fichiers PHP compilés (si applicable)
+*.php~

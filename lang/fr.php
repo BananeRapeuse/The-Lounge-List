@@ -184,6 +184,10 @@ return [
     'setup.error.owner_create' => 'Impossible de créer le compte Propriétaire.',
     'setup.error.config_write' => 'Impossible d\'écrire config.php. Vérifiez les permissions du dossier.',
 
+    // Nouvelles traductions pour la désactivation facile de reCAPTCHA et autres options
+    'setup.recaptcha_disable_label' => '[ ] Désactiver Google reCAPTCHA',
+    'setup.recaptcha_help_text' => 'Décochez ci-dessus pour désactiver reCAPTCHA. Vous pourrez le réactiver plus tard en ajoutant vos clés reCAPTCHA.',
+
     'auth.login.title' => 'Connexion',
     'auth.login.heading' => 'Connexion joueur',
     'auth.login.intro' => 'Connectez-vous pour soumettre des records de complétion.',

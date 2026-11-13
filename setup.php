@@ -223,6 +223,7 @@ $values = [
     'discord_server_widget_url' => '',
     'discord_server_id' => '',
     'discord_server_theme' => 'dark',
+    'recaptcha_disabled' => '',  // Vide = reCAPTCHA activé, '1' = désactivé
     'recaptcha_site_key' => '',
     'recaptcha_secret_key' => '',
     'email_enabled' => '',
@@ -251,7 +252,13 @@ if (!$isInstalled && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $recaptchaSiteKey = trim($values['recaptcha_site_key']);
         $recaptchaSecretKey = trim($values['recaptcha_secret_key']);
-        $recaptchaConfigured = $recaptchaSiteKey !== '' || $recaptchaSecretKey !== '';
+
+        // Si reCAPTCHA est désactivé via la checkbox, ne pas vérifier les clés
+        if ($values['recaptcha_disabled'] === '1') {
+            $recaptchaConfigured = false;  // Désactiver reCAPTCHA
+        } else {
+            $recaptchaConfigured = $recaptchaSiteKey !== '' || $recaptchaSecretKey !== '';
+        }
 
         // reCAPTCHA is optional, but if one key is supplied, both keys are required.
         if ($recaptchaConfigured) {
@@ -524,32 +531,47 @@ if (!$isInstalled && $_SERVER['REQUEST_METHOD'] === 'POST') {
             <fieldset>
                 <legend><?= setup_e(setup_t($copy, 'setup.section_security')) ?> <span class="optional-label">(Optional)</span></legend>
                 <p class="hint"><?= setup_e(setup_t($copy, 'setup.recaptcha_hint')) ?></p>
-                <div class="grid">
-                    <label>
-                        <?= setup_e(setup_t($copy, 'setup.recaptcha_site_key')) ?>
-                        <input
-                            id="recaptcha-site-key"
-                            name="recaptcha_site_key"
-                            value="<?= setup_e($values['recaptcha_site_key']) ?>"
-                            autocomplete="off"
-                        >
-                    </label>
-                    <label>
-                        <?= setup_e(setup_t($copy, 'setup.recaptcha_secret_key')) ?>
-                        <input
-                            type="password"
-                            name="recaptcha_secret_key"
-                            value="<?= setup_e($values['recaptcha_secret_key']) ?>"
-                            autocomplete="off"
-                        >
-                    </label>
+
+                <!-- Checkbox pour désactiver reCAPTCHA facilement -->
+                <label class="toggle">
+                    <input type="checkbox" name="recaptcha_disabled" value="1"<?= $values['recaptcha_disabled'] === '1' ? ' checked' : '' ?>>
+                    <?= setup_e(setup_t($copy, 'setup.recaptcha_disable_label')) ?>
+                </label>
+
+                <!-- Champs reCAPTCHA (cachés si checkbox coché) -->
+                <div id="recaptcha-fields" style="display:<?= $values['recaptcha_disabled'] === '1' ? 'none' : 'block' ?>;">
+                    <div class="grid">
+                        <label>
+                            <?= setup_e(setup_t($copy, 'setup.recaptcha_site_key')) ?>
+                            <input
+                                id="recaptcha-site-key"
+                                name="recaptcha_site_key"
+                                value="<?= setup_e($values['recaptcha_site_key']) ?>"
+                                autocomplete="off"
+                            >
+                        </label>
+                        <label>
+                            <?= setup_e(setup_t($copy, 'setup.recaptcha_secret_key')) ?>
+                            <input
+                                type="password"
+                                name="recaptcha_secret_key"
+                                value="<?= setup_e($values['recaptcha_secret_key']) ?>"
+                                autocomplete="off"
+                            >
+                        </label>
+                    </div>
+                    <p class="hint"><?= setup_e(setup_t($copy, 'setup.recaptcha_reload_hint')) ?></p>
+                    <div
+                        id="setup-recaptcha-widget"
+                        class="recaptcha-box"
+                        data-empty-message="<?= setup_e(setup_t($copy, 'setup.recaptcha_enter_site_key')) ?>"
+                    ></div>
                 </div>
-                <p class="hint"><?= setup_e(setup_t($copy, 'setup.recaptcha_reload_hint')) ?></p>
-                <div
-                    id="setup-recaptcha-widget"
-                    class="recaptcha-box"
-                    data-empty-message="<?= setup_e(setup_t($copy, 'setup.recaptcha_enter_site_key')) ?>"
-                ></div>
+
+                <!-- Message d'aide -->
+                <p class="hint" style="margin-top: 10px; color: #87c5ff;">
+                    <?= setup_e(setup_t($copy, 'setup.recaptcha_help_text')) ?>
+                </p>
             </fieldset>
 
             <fieldset>
