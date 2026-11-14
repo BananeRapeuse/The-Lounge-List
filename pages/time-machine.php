@@ -5,7 +5,9 @@ require dirname(__DIR__) . '/bootstrap.php';
 require dirname(__DIR__) . '/includes/list_page_helpers.php';
 
 $pdo = db();
+$activeList = demonlist_active_list();
 $allDemons = demonlist_fetch_all_demons($pdo);
+$allDemons = demonlist_apply_list_context($allDemons, $activeList);
 $now = new DateTimeImmutable('now', time_machine_timezone());
 $availableSince = time_machine_available_since($pdo);
 $requestedAt = time_machine_parse_input((string) ($_GET['at'] ?? ''));
@@ -25,33 +27,18 @@ if ($isTimeMachineView) {
     $futureEventsStmt = $pdo->prepare(
         'SELECT id, demon_id, old_position, new_position, note, created_at
          FROM demon_position_history
-         WHERE created_at > :at
+         WHERE list_key = :list_key AND created_at > :at
          ORDER BY created_at DESC, id DESC'
     );
     $futureEventsStmt->execute([
+        ':list_key' => $activeList,
         ':at' => $viewAt->format('Y-m-d H:i:s'),
     ]);
     $snapshotDemons = time_machine_reconstruct_demons($snapshotDemons, $futureEventsStmt->fetchAll());
     $snapshotDemons = time_machine_filter_demons_created_by($snapshotDemons, $viewAt);
 }
 
-$parts = demonlist_partition_demons($snapshotDemons, $isTimeMachineView);
-$main = $parts['main'];
-$extended = $parts['extended'];
-$legacy = $parts['legacy'];
-$showcase = $parts['showcase'];
-$showExtendedList = demonlist_show_extended_list();
-$showLegacyList = demonlist_show_legacy_list();
-
-$mainListDescription = $isTimeMachineView
-    ? t('time.main_snapshot')
-    : demonlist_main_list_dropdown_description($showExtendedList, $showLegacyList);
-$extendedListDescription = $isTimeMachineView
-    ? t('time.extended_snapshot')
-    : demonlist_extended_list_dropdown_description(true);
-$legacyListDescription = $isTimeMachineView
-    ? t('time.legacy_snapshot')
-    : demonlist_legacy_list_dropdown_description();
+$showcase = $snapshotDemons;
 
 $timeMachineInputValue = time_machine_format_input($viewAt);
 $timeMachineMinValue = $availableSince instanceof DateTimeImmutable
@@ -68,13 +55,10 @@ render_header(t('time.title'), 'time_machine', [
 ?>
 
 <nav class="flex wrap m-center fade" id="lists" style="text-align: center;">
-                    <?php render_list_dropdown('mainlist', t('list.main'), $mainListDescription, $main, $isTimeMachineView); ?>
-    <?php if ($showExtendedList): ?>
-        <?php render_list_dropdown('extended', t('list.extended'), $extendedListDescription, $extended, $isTimeMachineView); ?>
-    <?php endif; ?>
-    <?php if ($showLegacyList): ?>
-        <?php render_list_dropdown('legacy', t('list.legacy'), $legacyListDescription, $legacy, $isTimeMachineView); ?>
-    <?php endif; ?>
+    <?php foreach (['main', 'platformer', 'incompletion', 'challenge'] as $listKey): ?>
+        <?php $listParams = $isTimeMachineView ? ['at' => time_machine_format_input($viewAt)] : []; ?>
+        <a class="button <?= $activeList === $listKey ? 'blue' : 'white' ?> hover small" href="<?= e(demonlist_list_url('time-machine.php', $listKey, $listParams)) ?>"><?= e(demonlist_list_label($listKey)) ?></a>
+    <?php endforeach; ?>
 </nav>
 
 <div class="flex m-center container">
@@ -90,6 +74,7 @@ render_header(t('time.title'), 'time_machine', [
 
         <section class="panel fade time-machine-tool" id="time-machine">
             <form class="stack-form" id="time-machine-form" method="get" action="<?= e(base_url('time-machine.php')) ?>">
+                <input type="hidden" name="list" value="<?= e($activeList) ?>">
                 <div class="underlined pad">
                     <h1><?= e(t('time.title')) ?></h1>
                 </div>
@@ -139,13 +124,10 @@ render_header(t('time.title'), 'time_machine', [
             $currentPosition = (int) ($demon['current_position'] ?? $position);
             $minimumScore = number_format(pointercrate_score($position, $requirement, $requirement), 2);
             $fullScore = number_format(pointercrate_score($position, $requirement, 100), 2);
-            $isLegacy = (int) ($demon['legacy'] ?? 0) === 1;
-            $showDemonPoints = demonlist_is_ranked_entry($position, $isLegacy);
-            $bucket = $isTimeMachineView
-                ? historical_list_bucket($position)
-                : demonlist_list_bucket($position, $isLegacy);
+            $showDemonPoints = demonlist_is_ranked_entry($position, false, $activeList);
+            $bucket = $activeList;
             $demonUrl = demon_detail_url($demon, $isTimeMachineView);
-            $positionedName = demonlist_positioned_name($position, $bucket === 'legacy', (string) ($demon['name'] ?? ''));
+            $positionedName = demonlist_positioned_name($position, false, (string) ($demon['name'] ?? ''));
             ?>
             <section
                 class="panel fade flex mobile-col"
@@ -176,7 +158,7 @@ render_header(t('time.title'), 'time_machine', [
                         <?php endif; ?>
                         <?php if ($isTimeMachineView): ?>
                             <div class="muted" style="text-align: left; font-size: 0.85em; margin-top: 4px;">
-                                <?= historical_list_bucket($currentPosition) === 'legacy' ? e(t('list.currently_legacy')) : e(t('list.currently_rank', ['rank' => $currentPosition])) ?>
+                                <?= e(t('list.currently_rank', ['rank' => $currentPosition])) ?>
                             </div>
                         <?php endif; ?>
                     </div>

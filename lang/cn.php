@@ -95,9 +95,9 @@ return [
     'footer.submit_record' => '提交记录',
     'footer.rights' => '保留所有权利 {app}，{app} 与 RobTopGamesAB 无任何关联。',
 
-    'list.main' => '主列表',
-    'list.extended' => '扩展列表',
-    'list.legacy' => '遗产列表',
+    'list.main' => 'Main List',
+    'list.extended' => 'Platformer List',
+    'list.legacy' => 'Challenge List',
     'list.filter' => '筛选...',
     'list.filter_shown' => '筛选显示的恶魔...',
     'list.no_entries' => '此列表中没有条目。',
@@ -218,8 +218,8 @@ return [
     'auth.logout.invalid' => '无效的登出请求。',
     'auth.logout.success' => '您已成功登出。',
 
-    'home.title' => '主列表',
-    'home.heading' => 'Geometry Dash Demonlist',
+    'home.title' => 'Main List',
+    'home.heading' => 'The Lounge List',
     'home.intro_all' => '主列表目前显示所有已排名的恶魔，没有分区限制。',
     'home.intro_default' => 'Demonlist 的主列表，包含游戏中排名最难的关卡。',
     'home.editors' => '列表编辑',

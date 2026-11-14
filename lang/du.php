@@ -92,9 +92,9 @@ return [
     'footer.submit_record' => 'Indsend rekord',
     'footer.rights' => 'Alle rettigheder forbeholdes {app}. {app} er på ingen måde tilknyttet RobTopGamesAB.',
 
-    'list.main' => 'Hovedliste',
-    'list.extended' => 'Udvidet liste',
-    'list.legacy' => 'Legacy-liste',
+    'list.main' => 'Main List',
+    'list.extended' => 'Platformer List',
+    'list.legacy' => 'Challenge List',
     'list.filter' => 'Filtrér...',
     'list.filter_shown' => 'Filtrér viste dæmoner...',
     'list.no_entries' => 'Ingen poster på denne liste.',
@@ -215,8 +215,8 @@ return [
     'auth.logout.invalid' => 'Ugyldig logud-anmodning.',
     'auth.logout.success' => 'Du er blevet logget ud.',
 
-    'home.title' => 'Hovedliste',
-    'home.heading' => 'Geometry Dash Demonlist',
+    'home.title' => 'Main List',
+    'home.heading' => 'The Lounge List',
     'home.intro_all' => 'Hovedlisten viser i øjeblikket alle rangerede dæmoner uden sektionsbegrænsninger.',
     'home.intro_default' => 'Hovedlisten over Demonlist med de sværeste rangerede baner i spillet.',
     'home.editors' => 'Liste-redaktører',

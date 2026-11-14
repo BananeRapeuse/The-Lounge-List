@@ -92,9 +92,9 @@ return [
     'footer.submit_record' => 'Kirim Rekor',
     'footer.rights' => 'Hak cipta dilindungi {app}. {app} tidak berafiliasi dengan RobTopGamesAB dengan cara apa pun.',
 
-    'list.main' => 'Daftar Utama',
-    'list.extended' => 'Daftar Diperluas',
-    'list.legacy' => 'Daftar Warisan',
+    'list.main' => 'Main List',
+    'list.extended' => 'Platformer List',
+    'list.legacy' => 'Challenge List',
     'list.filter' => 'Filter...',
     'list.filter_shown' => 'Filter iblis yang ditampilkan...',
     'list.no_entries' => 'Tidak ada entri dalam daftar ini.',
@@ -215,8 +215,8 @@ return [
     'auth.logout.invalid' => 'Permintaan keluar tidak valid.',
     'auth.logout.success' => 'Anda telah keluar.',
 
-    'home.title' => 'Daftar Utama',
-    'home.heading' => 'Geometry Dash Demonlist',
+    'home.title' => 'Main List',
+    'home.heading' => 'The Lounge List',
     'home.intro_all' => 'Daftar utama saat ini menampilkan setiap iblis yang diperingkat tanpa batas bagian.',
     'home.intro_default' => 'Daftar utama Demonlist dengan level tersulit yang diperingkat dalam game.',
     'home.editors' => 'Editor Daftar',

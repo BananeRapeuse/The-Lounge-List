@@ -92,9 +92,9 @@ return [
     'footer.submit_record' => 'Enviar registro',
     'footer.rights' => 'Todos los derechos reservados {app} y {app} no están afiliados de ninguna manera con RobTopGamesAB.',
 
-    'list.main' => 'Lista principal',
-    'list.extended' => 'Lista extendida',
-    'list.legacy' => 'Lista heredada',
+    'list.main' => 'Main List',
+    'list.extended' => 'Platformer List',
+    'list.legacy' => 'Challenge List',
     'list.filter' => 'Filtrar...',
     'list.filter_shown' => 'Filtrar demonios mostrados...',
     'list.no_entries' => 'No hay entradas en esta lista.',
@@ -215,8 +215,8 @@ return [
     'auth.logout.invalid' => 'Solicitud de cierre de sesión inválida.',
     'auth.logout.success' => 'Has cerrado sesión.',
 
-    'home.title' => 'Lista principal',
-    'home.heading' => 'Geometry Dash Demonlist',
+    'home.title' => 'Main List',
+    'home.heading' => 'The Lounge List',
     'home.intro_all' => 'La lista principal muestra actualmente todos los demonios clasificados sin límites de sección.',
     'home.intro_default' => 'La lista principal de Demonlist con los niveles más difíciles clasificados del juego.',
     'home.editors' => 'Editores de lista',

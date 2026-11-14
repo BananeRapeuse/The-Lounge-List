@@ -66,34 +66,22 @@ function render_stats_demon_links(array $demons, bool $useLabel = false): string
 
 $pdo = db();
 $activeList = demonlist_active_list();
-$ratedPlusEnabled = demonlist_ratedplus_enabled();
-$activePointsColumn = $activeList === 'ratedplus' ? 'ratedplus_points' : 'points';
-
-$hasBonusPointsColumn = false;
-try {
-    $hasBonusPointsColumn = (bool) $pdo->query(
-        "SELECT COUNT(*)
-         FROM information_schema.columns
-         WHERE table_schema = DATABASE()
-           AND table_name = 'users'
-           AND column_name = 'bonus_points'"
-    )->fetchColumn();
-} catch (Throwable) {
-    $hasBonusPointsColumn = false;
-}
 
 $hasUserBannedColumn = users_has_is_banned_column($pdo);
 $userSelectFields = [
-    'id',
-    'username',
-    users_has_display_name_column($pdo) ? 'display_name' : 'NULL AS display_name',
-    'country_code',
-    'role',
-    $activePointsColumn . ' AS points',
-    $hasBonusPointsColumn ? 'bonus_points' : '0.00 AS bonus_points',
-    $hasUserBannedColumn ? 'is_banned' : '0 AS is_banned',
+    'u.id',
+    'u.username',
+    users_has_display_name_column($pdo) ? 'u.display_name' : 'NULL AS display_name',
+    'u.country_code',
+    'u.role',
+    'COALESCE(ulp.points, 0.00) AS points',
+    'COALESCE(ulp.bonus_points, 0.00) AS bonus_points',
+    $hasUserBannedColumn ? 'u.is_banned' : '0 AS is_banned',
 ];
-$userSelect = 'SELECT ' . implode(', ', $userSelectFields) . ' FROM users ORDER BY username ASC';
+$userSelect = 'SELECT ' . implode(', ', $userSelectFields) . '
+               FROM users u
+               LEFT JOIN user_list_points ulp ON ulp.user_id = u.id AND ulp.list_key = ' . $pdo->quote($activeList) . '
+               ORDER BY u.username ASC';
 
 $users = $pdo->query($userSelect)->fetchAll();
 
@@ -128,6 +116,7 @@ try {
 
 $demonSelectFields = [
     'id',
+    'list_key',
     'name',
     'position',
     'rated_position',
@@ -146,9 +135,12 @@ $demons = $pdo->query('SELECT ' . implode(', ', $demonSelectFields) . '
                        ORDER BY position ASC')->fetchAll();
 $demons = demonlist_apply_list_context($demons, $activeList);
 
-$records = db()->query('SELECT demon_id, player, progress, enjoyment
-                        FROM completions
-                        ORDER BY created_at DESC')->fetchAll();
+$recordsStmt = $pdo->prepare('SELECT demon_id, player, progress, enjoyment
+                              FROM completions
+                              WHERE list_key = :list_key
+                              ORDER BY created_at DESC');
+$recordsStmt->execute([':list_key' => $activeList]);
+$records = $recordsStmt->fetchAll();
 
 $demonById = [];
 foreach ($demons as $demon) {
@@ -253,8 +245,8 @@ foreach ($demons as $demon) {
     $demonName = (string) $demon['name'];
     $demonPosition = (int) $demon['position'];
     $legacy = (int) $demon['legacy'] === 1;
-    $isRankedEntry = demonlist_is_ranked_entry($demonPosition, $legacy);
-    $isRatedPlusOnly = $activeList === 'ratedplus' && (int) ($demon['rated'] ?? 0) !== 1;
+    $isRankedEntry = demonlist_is_ranked_entry($demonPosition, $legacy, $activeList);
+    $isRatedPlusOnly = false;
     $demonItem = [
         'id' => $demonId,
         'name' => $demonName,
@@ -319,8 +311,8 @@ foreach ($records as $record) {
     $position = (int) $demon['position'];
     $requirement = (int) $demon['requirement'];
     $legacy = (int) $demon['legacy'] === 1;
-    $isRankedEntry = demonlist_is_ranked_entry($position, $legacy);
-    $isRatedPlusOnly = $activeList === 'ratedplus' && (int) ($demon['rated'] ?? 0) !== 1;
+    $isRankedEntry = demonlist_is_ranked_entry($position, $legacy, $activeList);
+    $isRatedPlusOnly = false;
 
     $progress = (int) ($record['progress'] ?? 0);
     if ($progress < $requirement) {
@@ -345,16 +337,10 @@ foreach ($records as $record) {
         }
     }
 
-    $listBucket = demonlist_list_bucket($position, $legacy);
+    $listBucket = $activeList;
     if ($progress >= 100) {
         $playersByKey[$key]['total_completions']++;
-        if ($listBucket === 'main') {
-            $playersByKey[$key]['main_records']++;
-        } elseif ($listBucket === 'extended') {
-            $playersByKey[$key]['extended_records']++;
-        } else {
-            $playersByKey[$key]['legacy_records']++;
-        }
+        $playersByKey[$key]['main_records']++;
 
         $completionItem = [
             'id' => $demonId,
@@ -364,13 +350,7 @@ foreach ($records as $record) {
             'url' => demonlist_list_url((string) $position, $activeList),
         ];
         $playersByKey[$key]['completed'][$demonId] = $completionItem;
-        if ($listBucket === 'main') {
-            $playersByKey[$key]['main_completed'][$demonId] = $completionItem;
-        } elseif ($listBucket === 'extended') {
-            $playersByKey[$key]['extended_completed'][$demonId] = $completionItem;
-        } else {
-            $playersByKey[$key]['legacy_completed'][$demonId] = $completionItem;
-        }
+        $playersByKey[$key]['main_completed'][$demonId] = $completionItem;
 
         if ($position > 0) {
             $completionHardestScore = pointercrate_score($position, $requirement, 100);
@@ -485,11 +465,12 @@ unset($player);
 
 if ($userPointUpdates !== []) {
     try {
-        $updatePoints = db()->prepare('UPDATE users SET ' . $activePointsColumn . ' = :points WHERE id = :id');
+        $updatePoints = db()->prepare('UPDATE user_list_points SET points = :points WHERE user_id = :id AND list_key = :list_key');
         foreach ($userPointUpdates as $update) {
             $updatePoints->execute([
                 ':points' => $update['points'],
                 ':id' => $update['id'],
+                ':list_key' => $activeList,
             ]);
         }
     } catch (Throwable) {
@@ -846,18 +827,15 @@ render_header(t('stats.title'), 'players');
     <div class="panel-head">
         <h1><?= e(t('stats.title')) ?></h1>
         <p><?= e(t('stats.intro')) ?></p>
-        <?php if ($activeList === 'ratedplus'): ?>
-            <p class="ratedplus-stats-context"><span><?= e(t('list.ratedplus_badge')) ?></span> <?= e(t('list.ratedplus_stats_context', ['list' => t('list.ratedplus')])) ?></p>
-        <?php endif; ?>
+        <p class="ratedplus-stats-context"><span><?= e(demonlist_list_label($activeList)) ?></span> <?= e(demonlist_list_description($activeList)) ?></p>
     </div>
 
     <div class="stats-viewer-tabs">
         <a class="button <?= $view === 'players' ? 'blue' : 'white' ?> hover small" href="<?= e(demonlist_list_url('players.php', $activeList)) ?>"><?= e(t('stats.players_tab')) ?></a>
         <a class="button <?= $view === 'countries' ? 'blue' : 'white' ?> hover small" href="<?= e(demonlist_list_url('players.php?view=countries', $activeList)) ?>"><?= e(t('stats.countries_tab')) ?></a>
-        <?php if ($ratedPlusEnabled): ?>
-            <a class="button <?= $activeList === 'ratedplus' ? 'blue' : 'white' ?> hover small" href="<?= e(demonlist_list_url('players.php' . ($view === 'countries' ? '?view=countries' : ''), 'ratedplus')) ?>"><?= e(t('list.ratedplus')) ?></a>
-        <?php endif; ?>
-        <a class="button <?= $activeList === 'demonlist' ? 'blue' : 'white' ?> hover small" href="<?= e(demonlist_list_url('players.php' . ($view === 'countries' ? '?view=countries' : ''), 'demonlist')) ?>"><?= e(t('list.demonlist')) ?></a>
+        <?php foreach (['main', 'platformer', 'incompletion', 'challenge'] as $listKey): ?>
+            <a class="button <?= $activeList === $listKey ? 'blue' : 'white' ?> hover small" href="<?= e(demonlist_list_url('players.php' . ($view === 'countries' ? '?view=countries' : ''), $listKey)) ?>"><?= e(demonlist_list_label($listKey)) ?></a>
+        <?php endforeach; ?>
     </div>
 
     <?php if ($view === 'countries'): ?>
@@ -918,7 +896,7 @@ render_header(t('stats.title'), 'players');
                             <p><?= e($countryHardestLabel) ?></p>
                         </article>
                         <article class="stats-viewer-summary-card stats-viewer-summary-card-breakdown">
-                            <h3><?= e(t('stats.demonlist_stats')) ?></h3>
+                            <h3><?= e(demonlist_list_label($activeList)) ?></h3>
                             <p><?= e(t('stats.breakdown', ['main' => (int) $selectedCountry['main_records'], 'extended' => (int) $selectedCountry['extended_records'], 'legacy' => (int) $selectedCountry['legacy_records'], 'progress' => (int) $selectedCountry['progress_records']])) ?></p>
                         </article>
                     </div>
@@ -1090,23 +1068,15 @@ render_header(t('stats.title'), 'players');
                         <p id="stats-contrib"><?= e(t('stats.contrib_counts', ['created' => count((array) $selectedPlayer['demons_created']), 'published' => count((array) $selectedPlayer['demons_published']), 'verified' => count((array) $selectedPlayer['demons_verified'])])) ?></p>
                     </article>
                     <article class="stats-viewer-summary-card stats-viewer-summary-card-breakdown">
-                        <h3><?= e(t('stats.demonlist_stats')) ?></h3>
+                        <h3><?= e(demonlist_list_label($activeList)) ?></h3>
                         <p id="stats-breakdown"><?= e(t('stats.breakdown', ['main' => (int) $selectedPlayer['main_records'], 'extended' => (int) $selectedPlayer['extended_records'], 'legacy' => (int) $selectedPlayer['legacy_records'], 'progress' => (int) $selectedPlayer['total_progress_records']])) ?></p>
                     </article>
                 </div>
 
                 <div class="stats-viewer-lines">
                     <article>
-                        <h3><?= e(t('stats.main_completed')) ?></h3>
+                        <h3><?= e(demonlist_list_label($activeList)) ?> — <?= e(t('stats.main_completed')) ?></h3>
                         <p id="stats-main-completed"><?= render_stats_demon_links((array) $selectedPlayer['main_completed']) ?></p>
-                    </article>
-                    <article>
-                        <h3><?= e(t('stats.extended_completed')) ?></h3>
-                        <p id="stats-extended-completed"><?= render_stats_demon_links((array) $selectedPlayer['extended_completed']) ?></p>
-                    </article>
-                    <article>
-                        <h3><?= e(t('stats.legacy_completed')) ?></h3>
-                        <p id="stats-legacy-completed"><?= render_stats_demon_links((array) $selectedPlayer['legacy_completed']) ?></p>
                     </article>
                     <article>
                         <h3><?= e(t('stats.created')) ?></h3>

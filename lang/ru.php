@@ -95,9 +95,9 @@ return [
     'footer.submit_record' => 'Отправить рекорд',
     'footer.rights' => 'Все права защищены {app}, и {app} никак не связан с RobTopGamesAB.',
 
-    'list.main' => 'Main-лист',
-    'list.extended' => 'Extended-лист',
-    'list.legacy' => 'Legacy-лист',
+    'list.main' => 'Main List',
+    'list.extended' => 'Platformer List',
+    'list.legacy' => 'Challenge List',
     'list.filter' => 'Фильтр...',
     'list.filter_shown' => 'Фильтр отображаемых демонов...',
     'list.no_entries' => 'В этом списке нет записей.',
@@ -218,8 +218,8 @@ return [
     'auth.logout.invalid' => 'Недействительный запрос на выход.',
     'auth.logout.success' => 'Вы вышли из системы.',
 
-    'home.title' => 'Main-лист',
-    'home.heading' => 'Geometry Dash Demonlist',
+    'home.title' => 'Main List',
+    'home.heading' => 'The Lounge List',
     'home.intro_all' => 'Main-лист сейчас показывает всех ранжированных демонов без разделения на секции.',
     'home.intro_default' => 'Main-лист Demonlist с самыми сложными уровнями в игре, распределёнными по рангам.',
     'home.editors' => 'Модераторы списка',

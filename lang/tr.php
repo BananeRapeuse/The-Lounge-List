@@ -92,9 +92,9 @@ return [
     'footer.submit_record' => 'Kayıt Gönder',
     'footer.rights' => 'Tüm hakları saklıdır {app}. {app}, RobTopGamesAB ile hiçbir şekilde bağlantılı değildir.',
 
-    'list.main' => 'Ana Liste',
-    'list.extended' => 'Genişletilmiş Liste',
-    'list.legacy' => 'Eski Liste',
+    'list.main' => 'Main List',
+    'list.extended' => 'Platformer List',
+    'list.legacy' => 'Challenge List',
     'list.filter' => 'Filtrele...',
     'list.filter_shown' => 'Gösterilen iblisleri filtrele...',
     'list.no_entries' => 'Bu listede kayıt yok.',
@@ -215,8 +215,8 @@ return [
     'auth.logout.invalid' => 'Geçersiz çıkış isteği.',
     'auth.logout.success' => 'Çıkış yaptınız.',
 
-    'home.title' => 'Ana Liste',
-    'home.heading' => 'Geometry Dash Demonlist',
+    'home.title' => 'Main List',
+    'home.heading' => 'The Lounge List',
     'home.intro_all' => 'Ana liste şu anda bölüm sınırlaması olmaksızın tüm sıralı iblisleri gösteriyor.',
     'home.intro_default' => 'Demonlist\'in oyundaki en zor seviyelerin sıralandığı ana listesi.',
     'home.editors' => 'Liste Editörleri',

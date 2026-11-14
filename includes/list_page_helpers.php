@@ -110,8 +110,8 @@ function render_list_dropdown(string $id, string $title, string $description, ar
 
                 <?php foreach ($demons as $demon): ?>
                     <?php
-                    $positionLabel = demonlist_position_label((int) $demon['position'], $id === 'legacy');
-                    $positionedName = demonlist_positioned_name((int) $demon['position'], $id === 'legacy', (string) $demon['name']);
+                    $positionLabel = demonlist_position_label((int) $demon['position'], false);
+                    $positionedName = demonlist_positioned_name((int) $demon['position'], false, (string) $demon['name']);
                     $dropdownVerifier = trim((string) ($demon['verifier'] ?? ''));
                     $dropdownPublisher = trim((string) ($demon['publisher'] ?? ''));
                     $dropdownPublisherLabel = user_public_name_by_id((int) ($demon['publisher_user_id'] ?? 0), $dropdownPublisher) ?? $dropdownPublisher;
@@ -171,36 +171,24 @@ function demonlist_fetch_all_demons(PDO $pdo): array
     return $allDemons;
 }
 
-function historical_list_bucket(int $position): string
+function historical_list_bucket(int $position, ?string $listKey = null): string
 {
-    if ($position < 1) {
-        return 'legacy';
-    }
-
-    if ($position <= demonlist_main_list_limit()) {
-        return 'main';
-    }
-
-    if ($position <= demonlist_extended_list_limit()) {
-        return demonlist_show_extended_list() ? 'extended' : 'main';
-    }
-
-    return demonlist_show_legacy_list() ? 'legacy' : 'main';
+    return demonlist_normalize_list($listKey ?? 'main');
 }
 
 function demonlist_partition_demons(array $allDemons, bool $historical = false): array
 {
     $main = [];
-    $extended = [];
-    $legacy = [];
+    $platformer = [];
+    $incompletion = [];
+    $challenge = [];
     $showcase = [];
 
     foreach ($allDemons as $demon) {
-        $position = (int) ($demon['position'] ?? 0);
-        $isLegacy = (int) ($demon['legacy'] ?? 0) === 1;
-        $bucket = $historical
-            ? historical_list_bucket($position)
-            : demonlist_list_bucket($position, $isLegacy);
+        $bucket = historical_list_bucket(
+            (int) ($demon['position'] ?? 0),
+            (string) ($demon['list_key'] ?? 'main')
+        );
 
         if ($bucket === 'main') {
             $main[] = $demon;
@@ -208,19 +196,27 @@ function demonlist_partition_demons(array $allDemons, bool $historical = false):
             continue;
         }
 
-        if ($bucket === 'extended') {
-            $extended[] = $demon;
+        if ($bucket === 'platformer') {
+            $platformer[] = $demon;
             $showcase[] = $demon;
             continue;
         }
 
-        $legacy[] = $demon;
+        if ($bucket === 'incompletion') {
+            $incompletion[] = $demon;
+        } else {
+            $challenge[] = $demon;
+        }
+        $showcase[] = $demon;
     }
 
     return [
         'main' => $main,
-        'extended' => $extended,
-        'legacy' => $legacy,
+        'platformer' => $platformer,
+        'incompletion' => $incompletion,
+        'challenge' => $challenge,
+        'extended' => $platformer,
+        'legacy' => $challenge,
         'showcase' => $showcase,
     ];
 }
@@ -446,7 +442,7 @@ function roulette_item_from_demon(array $demon, string $bucket, bool $shown): ar
         'bucket' => $bucket,
         'shown' => $shown,
         'position' => $position,
-        'positionLabel' => demonlist_position_label($position, $bucket === 'legacy'),
+        'positionLabel' => demonlist_position_label($position, false),
         'currentPosition' => (int) ($demon['current_position'] ?? $position),
         'name' => (string) ($demon['name'] ?? ''),
         'creator' => $creator !== '' ? $creator : $publisherLabel,

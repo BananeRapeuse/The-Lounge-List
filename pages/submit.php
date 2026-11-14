@@ -23,7 +23,7 @@ if ($user === null) {
 }
 
 $form = [
-    'submit_list' => 'demonlist',
+    'submit_list' => 'main',
     'demon_name' => '',
     'video_url' => '',
     'raw_footage_url' => '',
@@ -36,20 +36,16 @@ $form = [
 ];
 $errors = [];
 
-$requestedSubmitList = strtolower(trim((string) ($_POST['submit_list'] ?? $_GET['list'] ?? 'demonlist')));
-$submitList = $requestedSubmitList === 'ratedplus' && demonlist_ratedplus_enabled() ? 'ratedplus' : 'demonlist';
+$requestedSubmitList = strtolower(trim((string) ($_POST['submit_list'] ?? $_GET['list'] ?? 'main')));
+$submitList = demonlist_normalize_list($requestedSubmitList);
 $form['submit_list'] = $submitList;
 
-$allDemons = db()->query('SELECT id, name, requirement, position, rated_position, rated, legacy
+$allDemons = db()->query('SELECT id, list_key, name, requirement, position, legacy
                           FROM demons
                           ORDER BY position ASC')->fetchAll();
 $demons = demonlist_apply_list_context($allDemons, $submitList);
 
-$showExtendedList = demonlist_show_extended_list();
-$showLegacyList = demonlist_show_legacy_list();
-$submitHint = (!$showExtendedList && !$showLegacyList)
-    ? t('submit.hint_all')
-    : t('submit.hint_current');
+$submitHint = demonlist_list_description($submitList);
 
 function resolve_demon_input(array $demons, string $rawInput): array
 {
@@ -161,11 +157,12 @@ if (method_is_post()) {
         rate_limit_record_failure($submitIpBucket, 10, 3600);
         $pdo = db();
         $insert = $pdo->prepare('INSERT INTO submissions
-            (type, demon_name, difficulty, publisher, player, submitted_by_user_id, video_url, raw_footage_url, platform, refresh_rate, progress, enjoyment, notes, status)
+            (list_key, type, demon_name, difficulty, publisher, player, submitted_by_user_id, video_url, raw_footage_url, platform, refresh_rate, progress, enjoyment, notes, status)
             VALUES
-            ("completion", :demon_name, NULL, NULL, :player, :submitted_by_user_id, :video_url, :raw_footage_url, :platform, :refresh_rate, :progress, :enjoyment, :notes, "pending")');
+            (:list_key, "completion", :demon_name, NULL, NULL, :player, :submitted_by_user_id, :video_url, :raw_footage_url, :platform, :refresh_rate, :progress, :enjoyment, :notes, "pending")');
 
         $insert->execute([
+            ':list_key' => $submitList,
             ':demon_name' => (string) $demon['name'],
             ':player' => (string) $user['username'],
             ':submitted_by_user_id' => (int) $user['id'],
@@ -211,10 +208,9 @@ render_header(t('submit.title'), 'submit');
 
     <div class="submit-list-selector" aria-label="Submission list">
         <span><?= e(t('submit.select_list')) ?></span>
-        <a class="button <?= $submitList === 'demonlist' ? 'blue' : 'white' ?> hover small" href="<?= e(demonlist_list_url('submit.php', 'demonlist')) ?>"><?= e(t('list.demonlist')) ?></a>
-        <?php if (demonlist_ratedplus_enabled()): ?>
-            <a class="button <?= $submitList === 'ratedplus' ? 'blue' : 'white' ?> hover small" href="<?= e(demonlist_list_url('submit.php', 'ratedplus')) ?>"><?= e(t('list.ratedplus')) ?></a>
-        <?php endif; ?>
+        <?php foreach (['main', 'platformer', 'incompletion', 'challenge'] as $listKey): ?>
+            <a class="button <?= $submitList === $listKey ? 'blue' : 'white' ?> hover small" href="<?= e(demonlist_list_url('submit.php', $listKey)) ?>"><?= e(demonlist_list_label($listKey)) ?></a>
+        <?php endforeach; ?>
     </div>
 
     <form class="stack-form" method="post" action="<?= e(base_url('submit.php')) ?>" novalidate>

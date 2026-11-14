@@ -121,7 +121,113 @@ function schema_apply_users_role_enum(PDO $pdo): void
 
 function schema_target_version(): string
 {
-    return '2026-10-ratedplus';
+    return '2026-11-independent-lists';
+}
+
+function schema_migrate_independent_lists(PDO $pdo, array &$logs): void
+{
+    $needsClassification = app_setting_get('schema.independent_lists_migrated', '') !== '1';
+
+    if (!schema_col_exists($pdo, 'demons', 'list_key')) {
+        $pdo->exec("ALTER TABLE demons ADD COLUMN list_key VARCHAR(24) NOT NULL DEFAULT 'main' AFTER id");
+        $logs[] = '[OK] Added demons.list_key';
+    }
+    foreach (['completions', 'submissions', 'demon_position_history'] as $table) {
+        if (schema_table_exists($pdo, $table) && !schema_col_exists($pdo, $table, 'list_key')) {
+            $afterColumn = $table === 'submissions' ? 'type' : 'demon_id';
+            $pdo->exec("ALTER TABLE `{$table}` ADD COLUMN list_key VARCHAR(24) NOT NULL DEFAULT 'main' AFTER `{$afterColumn}`");
+            $logs[] = '[OK] Added ' . $table . '.list_key';
+        }
+    }
+    if (!schema_table_exists($pdo, 'user_list_points')) {
+        $pdo->exec("CREATE TABLE user_list_points (
+            user_id INT UNSIGNED NOT NULL,
+            list_key VARCHAR(24) NOT NULL,
+            points DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+            bonus_points DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, list_key),
+            KEY idx_user_list_points_list (list_key, points),
+            CONSTRAINT fk_user_list_points_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $logs[] = '[OK] Added user_list_points table';
+    }
+
+    if ($needsClassification) {
+        if (schema_idx_exists($pdo, 'demons', 'uq_demons_position')) {
+            $pdo->exec('ALTER TABLE demons DROP INDEX uq_demons_position');
+        }
+        if (schema_idx_exists($pdo, 'demons', 'uq_demons_list_position')) {
+            $pdo->exec('ALTER TABLE demons DROP INDEX uq_demons_list_position');
+        }
+
+        $mainLimit = function_exists('demonlist_main_list_limit') ? demonlist_main_list_limit() : 75;
+        $extendedLimit = function_exists('demonlist_extended_list_limit') ? demonlist_extended_list_limit() : 150;
+        $rows = $pdo->query('SELECT id, position, rated_position, rated, legacy FROM demons ORDER BY position ASC, id ASC')->fetchAll();
+        $buckets = ['main' => [], 'platformer' => [], 'incompletion' => [], 'challenge' => []];
+        foreach ($rows as $row) {
+            $rated = (int) ($row['rated'] ?? 1) === 1;
+            $ratedPosition = $row['rated_position'] !== null ? (int) $row['rated_position'] : 0;
+            if (!$rated) {
+                $listKey = 'incompletion';
+                $sortPosition = (int) $row['position'];
+            } elseif ((int) ($row['legacy'] ?? 0) === 1 || $ratedPosition > $extendedLimit) {
+                $listKey = 'challenge';
+                $sortPosition = $ratedPosition > 0 ? $ratedPosition : (int) $row['position'];
+            } elseif ($ratedPosition > $mainLimit) {
+                $listKey = 'platformer';
+                $sortPosition = $ratedPosition;
+            } else {
+                $listKey = 'main';
+                $sortPosition = $ratedPosition > 0 ? $ratedPosition : (int) $row['position'];
+            }
+            $buckets[$listKey][] = ['id' => (int) $row['id'], 'sort_position' => $sortPosition];
+        }
+
+        $updateDemon = $pdo->prepare('UPDATE demons SET list_key = :list_key, position = :position WHERE id = :id');
+        foreach ($buckets as $listKey => $entries) {
+            usort($entries, static fn (array $a, array $b): int => ($a['sort_position'] <=> $b['sort_position']) ?: ($a['id'] <=> $b['id']));
+            foreach ($entries as $index => $entry) {
+                $updateDemon->execute([
+                    ':list_key' => $listKey,
+                    ':position' => $index + 1,
+                    ':id' => $entry['id'],
+                ]);
+            }
+        }
+
+        if (!schema_idx_exists($pdo, 'demons', 'uq_demons_list_position')) {
+            $pdo->exec('ALTER TABLE demons ADD UNIQUE KEY uq_demons_list_position (list_key, position)');
+        }
+        if (schema_idx_exists($pdo, 'demons', 'uq_demons_rated_position')) {
+            $pdo->exec('ALTER TABLE demons DROP INDEX uq_demons_rated_position');
+        }
+
+        if (schema_col_exists($pdo, 'completions', 'list_key')) {
+            $pdo->exec('UPDATE completions c INNER JOIN demons d ON d.id = c.demon_id SET c.list_key = d.list_key');
+        }
+        if (schema_col_exists($pdo, 'demon_position_history', 'list_key')) {
+            $pdo->exec('UPDATE demon_position_history h INNER JOIN demons d ON d.id = h.demon_id SET h.list_key = d.list_key');
+        }
+        if (schema_col_exists($pdo, 'submissions', 'list_key')) {
+            $pdo->exec('UPDATE submissions s INNER JOIN demons d ON d.name_cs = s.demon_name SET s.list_key = d.list_key');
+        }
+
+        if (schema_col_exists($pdo, 'users', 'ratedplus_points')) {
+            $pdo->exec("INSERT IGNORE INTO user_list_points (user_id, list_key, points, bonus_points)
+                        SELECT id, 'main', points, bonus_points FROM users");
+            $pdo->exec("INSERT IGNORE INTO user_list_points (user_id, list_key, points, bonus_points)
+                        SELECT id, 'incompletion', ratedplus_points, 0 FROM users");
+        } else {
+            $pdo->exec("INSERT IGNORE INTO user_list_points (user_id, list_key, points)
+                        SELECT id, 'main', points FROM users");
+        }
+
+        if (!app_setting_set('schema.independent_lists_migrated', '1')) {
+            throw new RuntimeException('Could not record the independent-lists migration marker.');
+        }
+        $logs[] = '[OK] Split existing levels into Main, Platformer, In-Completion, and Challenge lists';
+    }
 }
 
 function schema_seed_default_badges(PDO $pdo): int
@@ -308,9 +414,6 @@ function schema_needs_update(PDO $pdo): bool
     if (!schema_col_exists($pdo, 'demons', 'rated') || !schema_col_exists($pdo, 'demons', 'rated_position')) {
         return true;
     }
-    if (!schema_idx_exists($pdo, 'demons', 'uq_demons_rated_position')) {
-        return true;
-    }
     if (!schema_col_exists($pdo, 'users', 'ratedplus_points')) {
         return true;
     }
@@ -360,6 +463,15 @@ function schema_needs_update(PDO $pdo): bool
         return true;
     }
     if (!schema_table_exists($pdo, 'user_badges')) {
+        return true;
+    }
+    if (!schema_col_exists($pdo, 'demons', 'list_key')
+        || !schema_col_exists($pdo, 'completions', 'list_key')
+        || !schema_col_exists($pdo, 'submissions', 'list_key')
+        || !schema_col_exists($pdo, 'demon_position_history', 'list_key')
+        || !schema_table_exists($pdo, 'user_list_points')
+        || !schema_idx_exists($pdo, 'demons', 'uq_demons_list_position')
+        || app_setting_get('schema.independent_lists_migrated', '') !== '1') {
         return true;
     }
 
@@ -1019,18 +1131,13 @@ function run_schema_update(PDO $pdo): array
         $pdo->exec('ALTER TABLE demons ADD COLUMN rated_position INT UNSIGNED NULL AFTER position');
         $logs[] = '[OK] Added demons.rated_position';
     }
-    if (!schema_idx_exists($pdo, 'demons', 'uq_demons_rated_position')) {
-        $pdo->exec('ALTER TABLE demons ADD UNIQUE KEY uq_demons_rated_position (rated_position)');
-        $logs[] = '[OK] Added uq_demons_rated_position';
-    }
     if (!schema_col_exists($pdo, 'users', 'ratedplus_points')) {
         $pdo->exec('ALTER TABLE users ADD COLUMN ratedplus_points DECIMAL(10,2) NOT NULL DEFAULT 0.00 AFTER points');
         $logs[] = '[OK] Added users.ratedplus_points';
     }
-    demonlist_recompute_rated_positions($pdo);
-    $logs[] = '[OK] Recomputed Rated+ and Demonlist positions';
+    schema_migrate_independent_lists($pdo, $logs);
     $syncSummary = demonlist_sync_user_points($pdo);
-    $logs[] = '[OK] Recomputed Demonlist/Rated+ player scores: '
+    $logs[] = '[OK] Recomputed independent-list player scores: '
         . (int) ($syncSummary['updated_users'] ?? 0) . ' user(s) updated';
 
     $optimizeTables = [
@@ -1048,6 +1155,7 @@ function run_schema_update(PDO $pdo): array
         'user_badges',
         'demon_tags',
         'demon_tag_links',
+        'user_list_points',
     ];
     $optimizedTables = 0;
     foreach ($optimizeTables as $tableName) {

@@ -457,7 +457,7 @@ if (method_is_post()) {
     }
 }
 
-$stmt = db()->prepare('SELECT id, type, demon_name, progress, enjoyment, video_url, status, created_at, reviewed_at
+$stmt = db()->prepare('SELECT id, type, list_key, demon_name, progress, enjoyment, video_url, status, created_at, reviewed_at
                        FROM submissions
                        WHERE submitted_by_user_id = :user_id
                        ORDER BY created_at DESC
@@ -773,7 +773,7 @@ render_header(t('account.title'), 'account');
                     <tr>
                         <td>#<?= (int) $item['id'] ?></td>
                         <td><?= e((string) $item['type']) ?></td>
-                        <td><?= e((string) $item['demon_name']) ?></td>
+                <td><?= e(demonlist_list_label((string) ($item['list_key'] ?? 'main'))) ?> · <?= e((string) $item['demon_name']) ?></td>
                         <td><?= $item['progress'] !== null ? (int) $item['progress'] . '%' : '-' ?></td>
                         <td><?= $item['enjoyment'] !== null ? (int) $item['enjoyment'] . '/10' : '-' ?></td>
                         <td>

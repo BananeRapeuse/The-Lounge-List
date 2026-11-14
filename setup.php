@@ -90,6 +90,78 @@ function setup_main_url(): string
     return rtrim(setup_base_path(), '/') . '/';
 }
 
+function setup_schema_table_exists(PDO $pdo, string $table): bool
+{
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = :table');
+    $stmt->execute([':table' => $table]);
+    return (int) $stmt->fetchColumn() > 0;
+}
+
+function setup_schema_index_exists(PDO $pdo, string $table, string $index): bool
+{
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = :table AND index_name = :idx');
+    $stmt->execute([':table' => $table, ':idx' => $index]);
+    return (int) $stmt->fetchColumn() > 0;
+}
+
+function setup_schema_constraint_exists(PDO $pdo, string $table, string $constraint): bool
+{
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema = DATABASE() AND table_name = :table AND constraint_name = :constraint');
+    $stmt->execute([':table' => $table, ':constraint' => $constraint]);
+    return (int) $stmt->fetchColumn() > 0;
+}
+
+function setup_schema_column_is_auto_increment(PDO $pdo, string $table, string $column): bool
+{
+    $stmt = $pdo->prepare('SELECT extra FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = :table AND column_name = :column LIMIT 1');
+    $stmt->execute([':table' => $table, ':column' => $column]);
+    return stripos((string) $stmt->fetchColumn(), 'auto_increment') !== false;
+}
+
+function setup_schema_column_exists(PDO $pdo, string $table, string $column): bool
+{
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = :table AND column_name = :column');
+    $stmt->execute([':table' => $table, ':column' => $column]);
+    return (int) $stmt->fetchColumn() > 0;
+}
+
+/** Split ALTER TABLE clauses at commas outside parentheses and quoted identifiers/strings. */
+function setup_schema_split_alter_clauses(string $clauses): array
+{
+    $parts = [];
+    $start = 0;
+    $depth = 0;
+    $quote = '';
+    $length = strlen($clauses);
+    for ($i = 0; $i < $length; $i++) {
+        $char = $clauses[$i];
+        if ($quote !== '') {
+            if ($char === $quote && ($i === 0 || $clauses[$i - 1] !== '\\')) {
+                $quote = '';
+            }
+            continue;
+        }
+        if ($char === '`' || $char === "'" || $char === '"') {
+            $quote = $char;
+        } elseif ($char === '(') {
+            $depth++;
+        } elseif ($char === ')') {
+            $depth--;
+        } elseif ($char === ',' && $depth === 0) {
+            $part = trim(substr($clauses, $start, $i - $start));
+            if ($part !== '') {
+                $parts[] = $part;
+            }
+            $start = $i + 1;
+        }
+    }
+    $last = trim(substr($clauses, $start));
+    if ($last !== '') {
+        $parts[] = $last;
+    }
+    return $parts;
+}
+
 function setup_schema(PDO $pdo, string $path): void
 {
     $schema = file_get_contents($path);
@@ -97,11 +169,67 @@ function setup_schema(PDO $pdo, string $path): void
         throw new RuntimeException('db/schema.sql could not be read.');
     }
 
+    $schema = preg_replace('/^\s*--.*$/m', '', $schema) ?? $schema;
     foreach (preg_split('/;\s*(?:\r?\n|$)/', $schema) ?: [] as $statement) {
         $statement = trim($statement);
-        if ($statement !== '') {
-            $pdo->exec($statement);
+        if ($statement === '') {
+            continue;
         }
+
+        if (preg_match('/^CREATE\s+TABLE\s+`?([a-zA-Z0-9_]+)`?/i', $statement, $matches) === 1) {
+            $table = $matches[1];
+            if (!setup_schema_table_exists($pdo, $table)) {
+                $pdo->exec($statement);
+            } elseif (preg_match('/^CREATE\s+TABLE\s+`?[a-zA-Z0-9_]+`?\s*\((.*)\)\s*ENGINE\b/is', $statement, $definitionMatch) === 1) {
+                // A previous install attempt may have created some tables before
+                // failing. Add safe missing columns before the later index DDL.
+                foreach (setup_schema_split_alter_clauses($definitionMatch[1]) as $columnDefinition) {
+                    if (preg_match('/^`([a-zA-Z0-9_]+)`\s+(.+)$/is', $columnDefinition, $columnMatch) !== 1) {
+                        continue;
+                    }
+                    $column = $columnMatch[1];
+                    $definition = $columnMatch[2];
+                    $safeToAdd = preg_match('/\bDEFAULT\b|\bAUTO_INCREMENT\b|\bGENERATED\s+ALWAYS\b/i', $definition) === 1
+                        || preg_match('/\bNOT\s+NULL\b/i', $definition) !== 1;
+                    if ($safeToAdd && !setup_schema_column_exists($pdo, $table, $column)) {
+                        $pdo->exec('ALTER TABLE `' . $table . '` ADD COLUMN `' . $column . '` ' . $definition);
+                    }
+                }
+            }
+            continue;
+        }
+
+        if (preg_match('/^ALTER\s+TABLE\s+`?([a-zA-Z0-9_]+)`?\s+(.+)$/is', $statement, $matches) === 1) {
+            $table = $matches[1];
+            $clauses = setup_schema_split_alter_clauses($matches[2]);
+            $pending = [];
+            foreach ($clauses as $clause) {
+                if (preg_match('/^ADD\s+PRIMARY\s+KEY\b/i', $clause) === 1) {
+                    if (setup_schema_index_exists($pdo, $table, 'PRIMARY')) {
+                        continue;
+                    }
+                } elseif (preg_match('/^ADD\s+(?:UNIQUE\s+)?(?:KEY|INDEX)\s+`?([a-zA-Z0-9_]+)`?/i', $clause, $indexMatch) === 1) {
+                    if (setup_schema_index_exists($pdo, $table, $indexMatch[1])) {
+                        continue;
+                    }
+                } elseif (preg_match('/^ADD\s+CONSTRAINT\s+`?([a-zA-Z0-9_]+)`?/i', $clause, $constraintMatch) === 1) {
+                    if (setup_schema_constraint_exists($pdo, $table, $constraintMatch[1])) {
+                        continue;
+                    }
+                } elseif (preg_match('/^MODIFY\s+`?([a-zA-Z0-9_]+)`?.*\bAUTO_INCREMENT\b/i', $clause, $columnMatch) === 1) {
+                    if (setup_schema_column_is_auto_increment($pdo, $table, $columnMatch[1])) {
+                        continue;
+                    }
+                }
+                $pending[] = $clause;
+            }
+            if ($pending !== []) {
+                $pdo->exec('ALTER TABLE `' . $table . '` ' . implode(', ', $pending));
+            }
+            continue;
+        }
+
+        $pdo->exec($statement);
     }
 }
 
@@ -194,9 +322,9 @@ function setup_recaptcha_site_key_valid(string $siteKey): bool
 }
 
 $languages = setup_supported_languages($root);
-$language = (string) ($_GET['lang'] ?? $_POST['setup_language'] ?? $_POST['default_language'] ?? 'en');
+$language = (string) ($_GET['lang'] ?? $_POST['setup_language'] ?? $_POST['default_language'] ?? 'fr');
 if (!isset($languages[$language])) {
-    $language = array_key_exists('en', $languages) ? 'en' : array_key_first($languages);
+    $language = array_key_exists('fr', $languages) ? 'fr' : array_key_first($languages);
 }
 $copy = setup_translation($root, $language);
 $defaultLanguage = (string) ($_POST['default_language'] ?? $language);
@@ -205,7 +333,7 @@ if (!isset($languages[$defaultLanguage])) {
 }
 
 $values = [
-    'name' => '',
+    'name' => 'The Lounge List',
     'tagline' => '',
     'base_url' => setup_base_path(),
     'public_url' => '',

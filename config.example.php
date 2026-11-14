@@ -4,8 +4,8 @@ declare(strict_types=1);
 // This file is only a reference. Open setup.php in the browser to generate config.php.
 return [
     'app' => [
-        'name' => 'My Demonlist',
-        'ratedplus_enabled' => true, // Set false to hide Rated+ and use Demonlist only.
+        'name' => 'The Lounge List',
+        'ratedplus_enabled' => true, // Set false to hide the In-Completion List.
         'brand_mode' => 2, // 1 = text, 2 = logo
         'logo_path' => 'logo.png',
         'logo_height' => 22,
@@ -15,7 +15,7 @@ return [
         'base_url' => '/demonlist',
         'public_url' => '', // Optional absolute URL for embeds, e.g. https://your-domain.com/demonlist
         'timezone' => 'UTC',
-        'default_language' => 'en',
+        'default_language' => 'fr',
         'debug' => false,
         'updated' => 0,
         'installation_complete' => false,
@@ -44,7 +44,7 @@ return [
         'smtp_username' => '',
         'smtp_password' => '',
         'from_address' => '', // required when enabled, e.g. noreply@your-domain.com
-        'from_name' => 'My Demonlist',
+        'from_name' => 'The Lounge List',
         // false: refuse the registration, so every account that exists is verified.
         // true : activate the account anyway (availability over verification).
         'fail_open' => false,

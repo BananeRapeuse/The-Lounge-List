@@ -7,7 +7,7 @@ require_once dirname(__DIR__) . '/includes/list_page_helpers.php';
 if (array_key_exists('at', $_GET) || array_key_exists('timemachine', $_GET)) {
     $target = 'time-machine.php';
     if (array_key_exists('at', $_GET)) {
-        $target .= '?at=' . rawurlencode((string) $_GET['at']);
+        $target .= '?at=' . rawurlencode((string) $_GET['at']) . '&list=' . rawurlencode(demonlist_active_list());
     }
     redirect($target);
 }
@@ -158,42 +158,7 @@ unset($demon);
 $allDemons = demonlist_apply_list_context($allDemons, $activeList);
 
 $isTimeMachineView = false;
-
-$main = [];
-$extended = [];
-$legacy = [];
-$showcase = [];
-$showExtendedList = demonlist_show_extended_list();
-$showLegacyList = demonlist_show_legacy_list();
-
-foreach ($allDemons as $demon) {
-    $position = (int) $demon['position'];
-    $isLegacy = (int) ($demon['legacy'] ?? 0) === 1;
-    // Rated+ templates remain visible even when the main site's legacy section
-    // is hidden. They are intentionally exclusive to the Rated+ view.
-    if ($activeList === 'ratedplus' && (int) ($demon['rated'] ?? 0) !== 1) {
-        $main[] = $demon;
-        $showcase[] = $demon;
-        continue;
-    }
-    $listBucket = $isTimeMachineView
-        ? historical_list_bucket($position)
-        : demonlist_list_bucket($position, $isLegacy);
-
-    if ($listBucket === 'main') {
-        $main[] = $demon;
-        $showcase[] = $demon;
-        continue;
-    }
-
-    if ($listBucket === 'extended') {
-        $extended[] = $demon;
-        $showcase[] = $demon;
-        continue;
-    }
-
-    $legacy[] = $demon;
-}
+$showcase = $allDemons;
 
 function demonlist_list_tags_from_get(): array
 {
@@ -409,15 +374,8 @@ $listHelpersSql .= '
 $listHelpers = $pdo->query($listHelpersSql)->fetchAll();
 
 $discordWidgetUrl = discord_server_widget_url();
-$pageDescription = demonlist_list_label($activeList) . ': ' . ((!$showExtendedList && !$showLegacyList)
-    ? 'All ranked demons are currently merged into one Main List.'
-    : 'Ranked demons with Main, Extended, and Legacy sections.');
-$mainListDescription = demonlist_main_list_dropdown_description($showExtendedList, $showLegacyList);
-$extendedListDescription = demonlist_extended_list_dropdown_description(true);
-$legacyListDescription = demonlist_legacy_list_dropdown_description();
-$mainIntro = (!$showExtendedList && !$showLegacyList)
-    ? t('home.intro_all')
-    : t('home.intro_default');
+$pageDescription = demonlist_list_description($activeList);
+$mainIntro = demonlist_list_description($activeList);
 
 render_header(t('home.title'), 'list', [
     'title' => t('home.title'),
@@ -427,19 +385,15 @@ render_header(t('home.title'), 'list', [
 ?>
 
 <nav class="flex wrap m-center fade" id="lists" style="text-align: center;">
-    <?php render_list_dropdown('mainlist', 'Main List', $mainListDescription, $main); ?>
-    <?php if ($showExtendedList): ?>
-        <?php render_list_dropdown('extended', 'Extended List', $extendedListDescription, $extended); ?>
-    <?php endif; ?>
-    <?php if ($showLegacyList): ?>
-        <?php render_list_dropdown('legacy', 'Legacy List', $legacyListDescription, $legacy); ?>
-    <?php endif; ?>
+    <?php foreach (['main', 'platformer', 'incompletion', 'challenge'] as $listKey): ?>
+        <a class="button <?= $activeList === $listKey ? 'blue' : 'white' ?> hover small" href="<?= e(demonlist_list_url('index.php', $listKey)) ?>"><?= e(demonlist_list_label($listKey)) ?></a>
+    <?php endforeach; ?>
 </nav>
 
 <div class="flex m-center container">
     <main class="left">
         <section class="panel fade" style="overflow: visible; z-index: 50;">
-            <?php if ($activeList === 'ratedplus'): ?>
+            <?php if ($activeList === 'incompletion'): ?>
                 <div class="ratedplus-list-banner" role="note">
                     <span class="ratedplus-list-banner-mark"><?= e(t('list.ratedplus_badge')) ?></span>
                     <span><?= e(t('list.ratedplus_banner', ['list' => t('list.ratedplus')])) ?></span>
@@ -539,16 +493,13 @@ render_header(t('home.title'), 'list', [
             $requirement = (int) $demon['requirement'];
             $position = (int) $demon['position'];
             $currentPosition = (int) ($demon['current_position'] ?? $position);
-            $isLegacy = (int) ($demon['legacy'] ?? 0) === 1;
-            $showDemonPoints = demonlist_is_ranked_entry($position, $isLegacy);
+            $showDemonPoints = demonlist_is_ranked_entry($position, false, $activeList);
             $minimumScore = $showDemonPoints ? number_format(pointercrate_score($position, $requirement, $requirement), 2) : '0.00';
             $fullScore = $showDemonPoints ? number_format(pointercrate_score($position, $requirement, 100), 2) : '0.00';
-            $bucket = $isTimeMachineView
-                ? historical_list_bucket($position)
-                : demonlist_list_bucket($position, $isLegacy);
-            $positionedName = demonlist_positioned_name($position, $bucket === 'legacy', (string) $demon['name']);
+            $bucket = $activeList;
+            $positionedName = demonlist_positioned_name($position, false, (string) $demon['name']);
             $demonUrl = demonlist_list_url((string) $position, $activeList);
-            $isRatedPlusTemplate = $activeList === 'ratedplus' && (int) ($demon['rated'] ?? 0) !== 1;
+            $isRatedPlusTemplate = $activeList === 'incompletion';
             ?>
             <section
                 class="panel fade flex mobile-col"
@@ -580,7 +531,7 @@ render_header(t('home.title'), 'list', [
                         <?php endif; ?>
                         <?php if ($isTimeMachineView): ?>
                             <div class="muted" style="text-align: left; font-size: 0.85em; margin-top: 4px;">
-                                <?= historical_list_bucket($currentPosition) === 'legacy' ? e(t('list.currently_legacy')) : e(t('list.currently_rank', ['rank' => $currentPosition])) ?>
+                                <?= e(t('list.currently_rank', ['rank' => $currentPosition])) ?>
                             </div>
                         <?php endif; ?>
                     </div>

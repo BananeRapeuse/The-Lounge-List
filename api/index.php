@@ -294,7 +294,18 @@ function api_list_bucket(PDO $pdo, int $position, bool $legacy): string
 
 function api_is_ranked_entry(PDO $pdo, int $position, bool $legacy): bool
 {
-    return $position > 0 && api_list_bucket($pdo, $position, $legacy) !== 'legacy';
+    return $position > 0;
+}
+
+function api_active_list(): string
+{
+    $requested = strtolower(trim((string) ($_GET['list'] ?? 'main')));
+    return match ($requested) {
+        'platformer', 'extended' => 'platformer',
+        'incompletion', 'ratedplus', 'rated+' => 'incompletion',
+        'challenge', 'legacy' => 'challenge',
+        default => 'main',
+    };
 }
 
 function api_query_int(string $key): ?int
@@ -504,8 +515,9 @@ function api_demon_sql_parts(PDO $pdo): array
 function api_paginate_demons(PDO $pdo, bool $listed): array
 {
     $parts = api_demon_sql_parts($pdo);
-    $where = ['1 = 1'];
+    $where = ['d.list_key = :list_key'];
     $params = [];
+    $params[':list_key'] = api_active_list();
 
     if ($listed) {
         $where[] = 'd.position > 0';
@@ -653,6 +665,7 @@ function api_format_demon(array $row): array
 
     return [
         'id' => (int) $row['id'],
+        'list' => (string) ($row['list_key'] ?? api_active_list()),
         'position' => (int) $row['position'],
         'name' => (string) $row['name'],
         'requirement' => (int) ($row['requirement'] ?? 100),
@@ -676,6 +689,7 @@ function api_minimal_demon(array $row): array
 {
     return [
         'id' => (int) $row['id'],
+        'list' => (string) ($row['list_key'] ?? api_active_list()),
         'position' => (int) $row['position'],
         'name' => (string) $row['name'],
     ];
@@ -885,8 +899,8 @@ function api_records_for_demon(PDO $pdo, int $demonId): array
 
 function api_paginate_records(PDO $pdo): array
 {
-    $where = ['1 = 1'];
-    $params = [];
+    $where = ['c.list_key = :list_key'];
+    $params = [':list_key' => api_active_list()];
 
     $status = api_query_string('status');
     if ($status !== null && strtolower($status) !== 'approved') {
@@ -996,11 +1010,12 @@ function api_full_record(PDO $pdo, int $recordId): array
     ];
 }
 
-function api_build_players(PDO $pdo): array
+function api_build_players(PDO $pdo, ?string $listKey = null): array
 {
+    $listKey = $listKey ?? api_active_list();
     $players = [];
 
-    $ensure = static function (string $name, ?array $user = null) use (&$players): string {
+    $ensure = static function (string $name, ?array $user = null) use (&$players, $listKey): string {
         $name = trim($name);
         if ($name === '') {
             $name = 'Unknown';
@@ -1012,6 +1027,7 @@ function api_build_players(PDO $pdo): array
             $players[$key] = [
                 'id' => (int) $player['id'],
                 'name' => (string) $player['name'],
+                'list' => $listKey,
                 'banned' => (bool) $player['banned'],
                 'score' => 0.0,
                 'rank' => null,
@@ -1039,10 +1055,11 @@ function api_build_players(PDO $pdo): array
     }
 
     $demonRows = $pdo->query(
-        'SELECT id, position, name, requirement, legacy, creator, creator_more, publisher, verifier,
+        'SELECT id, list_key, position, name, requirement, legacy, creator, creator_more, publisher, verifier,
                 ' . (api_schema_col_exists($pdo, 'demons', 'publisher_user_id') ? 'publisher_user_id' : 'NULL AS publisher_user_id') . ',
                 ' . (api_schema_col_exists($pdo, 'demons', 'verifier_user_id') ? 'verifier_user_id' : 'NULL AS verifier_user_id') . '
          FROM demons
+         WHERE list_key = ' . $pdo->quote($listKey) . '
          ORDER BY position ASC'
     )->fetchAll();
 
@@ -1069,8 +1086,9 @@ function api_build_players(PDO $pdo): array
         ? 'c.enjoyment'
         : 'NULL AS enjoyment';
     $records = $pdo->query(
-        'SELECT c.id, c.demon_id, c.player, c.video_url, c.progress, ' . $enjoymentSelect . '
+        'SELECT c.id, c.demon_id, c.list_key, c.player, c.video_url, c.progress, ' . $enjoymentSelect . '
          FROM completions c
+         WHERE c.list_key = ' . $pdo->quote($listKey) . '
          ORDER BY c.created_at DESC, c.id DESC'
     )->fetchAll();
 
@@ -1119,7 +1137,9 @@ function api_build_players(PDO $pdo): array
 
         $user = api_user_by_name_or_id((string) $player['name'], (int) $player['id']);
         if ($user !== null) {
-            $player['score'] += (float) ($user['bonus_points'] ?? 0);
+            $bonusStmt = $pdo->prepare('SELECT bonus_points FROM user_list_points WHERE user_id = :user_id AND list_key = :list_key LIMIT 1');
+            $bonusStmt->execute([':user_id' => (int) $user['id'], ':list_key' => $listKey]);
+            $player['score'] += (float) ($bonusStmt->fetchColumn() ?: 0);
         }
 
         $player['score'] = round((float) $player['score'], 2);
@@ -1211,6 +1231,7 @@ function api_public_player(array $player, bool $full = false): array
     $public = [
         'id' => (int) $player['id'],
         'name' => (string) $player['name'],
+        'list' => (string) ($player['list'] ?? api_active_list()),
         'banned' => (bool) $player['banned'],
         'score' => (float) $player['score'],
         'rank' => $player['rank'] !== null ? (int) $player['rank'] : null,
@@ -1284,14 +1305,16 @@ function api_nationality_record(PDO $pdo, string $code): array
 
 function api_list_information(PDO $pdo): array
 {
-    $totalDemons = (int) $pdo->query('SELECT COUNT(*) FROM demons')->fetchColumn();
-    $listedDemons = (int) $pdo->query('SELECT COUNT(*) FROM demons WHERE position > 0')->fetchColumn();
+    $listKey = api_active_list();
+    $countStmt = $pdo->prepare('SELECT COUNT(*) FROM demons WHERE list_key = :list_key');
+    $countStmt->execute([':list_key' => $listKey]);
+    $listedDemons = (int) $countStmt->fetchColumn();
 
     return [
         'name' => app_name(),
-        'list_size' => api_main_limit($pdo),
-        'extended_list_size' => api_extended_limit($pdo),
-        'total_demons' => $totalDemons,
+        'list_size' => $listedDemons,
+        'list' => $listKey,
+        'total_demons' => $listedDemons,
         'listed_demons' => $listedDemons,
     ];
 }

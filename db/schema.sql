@@ -61,6 +61,7 @@ CREATE TABLE `badges` (
 CREATE TABLE `completions` (
   `id` int(10) UNSIGNED NOT NULL,
   `demon_id` int(10) UNSIGNED NOT NULL,
+  `list_key` varchar(24) NOT NULL DEFAULT 'main',
   `player` varchar(120) NOT NULL,
   `video_url` varchar(255) NOT NULL,
   `progress` tinyint(3) UNSIGNED NOT NULL DEFAULT 100,
@@ -78,6 +79,7 @@ CREATE TABLE `completions` (
 
 CREATE TABLE `demons` (
   `id` int(10) UNSIGNED NOT NULL,
+  `list_key` varchar(24) NOT NULL DEFAULT 'main',
   `position` int(10) UNSIGNED NOT NULL,
   `name` varchar(120) NOT NULL,
   `difficulty` varchar(50) NOT NULL DEFAULT 'Extreme Demon',
@@ -124,6 +126,7 @@ CREATE TABLE `demon_level_info_values` (
 CREATE TABLE `demon_position_history` (
   `id` bigint(20) UNSIGNED NOT NULL,
   `demon_id` int(10) UNSIGNED NOT NULL,
+  `list_key` varchar(24) NOT NULL DEFAULT 'main',
   `old_position` int(10) UNSIGNED DEFAULT NULL,
   `new_position` int(10) UNSIGNED NOT NULL,
   `changed_by_user_id` int(10) UNSIGNED DEFAULT NULL,
@@ -230,6 +233,7 @@ CREATE TABLE `level_comment_reports` (
 
 CREATE TABLE `submissions` (
   `id` int(10) UNSIGNED NOT NULL,
+  `list_key` varchar(24) NOT NULL DEFAULT 'main',
   `type` enum('demon','completion') NOT NULL,
   `demon_name` varchar(120) NOT NULL,
   `difficulty` varchar(50) DEFAULT NULL,
@@ -290,6 +294,20 @@ CREATE TABLE `users` (
 -- --------------------------------------------------------
 
 --
+-- Cấu trúc bảng cho bảng `user_list_points`
+--
+
+CREATE TABLE `user_list_points` (
+  `user_id` int(10) UNSIGNED NOT NULL,
+  `list_key` varchar(24) NOT NULL,
+  `points` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `bonus_points` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- --------------------------------------------------------
+
+--
 -- Cấu trúc bảng cho bảng `user_badges`
 --
 
@@ -333,7 +351,7 @@ ALTER TABLE `completions`
 --
 ALTER TABLE `demons`
   ADD PRIMARY KEY (`id`),
-  ADD UNIQUE KEY `uq_demons_position` (`position`),
+  ADD UNIQUE KEY `uq_demons_list_position` (`list_key`,`position`),
   ADD UNIQUE KEY `uq_demons_name_cs` (`name_cs`),
   ADD KEY `idx_demons_legacy` (`legacy`),
   ADD KEY `idx_demons_comments_disabled` (`comments_disabled`),
@@ -434,6 +452,11 @@ ALTER TABLE `users`
   ADD KEY `idx_users_bonus_points` (`bonus_points`),
   ADD KEY `idx_users_last_ip` (`last_ip`);
 
+-- Chỉ mục cho bảng `user_list_points`
+ALTER TABLE `user_list_points`
+  ADD PRIMARY KEY (`user_id`,`list_key`),
+  ADD KEY `idx_user_list_points_list` (`list_key`,`points`);
+
 --
 -- Chỉ mục cho bảng `user_badges`
 --
@@ -505,6 +528,12 @@ ALTER TABLE `submissions`
 --
 ALTER TABLE `users`
   MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- Ràng buộc cho bảng `user_list_points`
+--
+ALTER TABLE `user_list_points`
+  ADD CONSTRAINT `fk_user_list_points_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE;
 
 --
 -- Các ràng buộc cho các bảng đã đổ

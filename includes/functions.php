@@ -78,9 +78,9 @@ function is_supported_language(string $language): bool
 
 function current_language(): string
 {
-    $configured = (string) config('app.default_language', 'en');
+    $configured = (string) config('app.default_language', 'fr');
     $selected = isset($_SESSION['language']) ? (string) $_SESSION['language'] : $configured;
-    return is_supported_language($selected) ? $selected : 'en';
+    return is_supported_language($selected) ? $selected : 'fr';
 }
 
 function is_supported_theme(string $theme): bool
@@ -2150,28 +2150,13 @@ function render_user_badges(array $badges, string $className = ''): string
     return '<span class="' . e($classAttr) . '">' . implode('', $items) . '</span>';
 }
 
-function demonlist_list_bucket(int $position, bool $legacy): string
+function demonlist_list_bucket(int $position, bool $legacy, ?string $listKey = null): string
 {
-    if ($position < 1) {
-        return 'legacy';
+    if ($listKey !== null && $listKey !== '') {
+        return demonlist_normalize_list($listKey);
     }
 
-    if ($legacy) {
-        return demonlist_show_legacy_list() ? 'legacy' : 'main';
-    }
-
-    $mainLimit = demonlist_main_list_limit();
-    $extendedLimit = demonlist_extended_list_limit();
-
-    if ($position <= $mainLimit) {
-        return 'main';
-    }
-
-    if ($position <= $extendedLimit) {
-        return demonlist_show_extended_list() ? 'extended' : 'main';
-    }
-
-    return demonlist_show_legacy_list() ? 'legacy' : 'main';
+    return $legacy ? 'challenge' : 'main';
 }
 
 function demonlist_position_label(int $position, bool $legacyList): string
@@ -2191,57 +2176,29 @@ function demonlist_positioned_name(int $position, bool $legacyList, string $name
 
 function demonlist_main_list_dropdown_description(bool $showExtendedList, bool $showLegacyList): string
 {
-    return match (true) {
-        !$showExtendedList && !$showLegacyList => t('list.desc.main_all_merged'),
-        !$showExtendedList && $showLegacyList => t('list.desc.main_extended_merged'),
-        $showExtendedList && !$showLegacyList => t('list.desc.main_legacy_merged'),
-        default => t('list.desc.main_range', ['limit' => demonlist_main_list_limit()]),
-    };
+    return demonlist_list_description('main');
 }
 
 function demonlist_extended_list_dropdown_description(bool $includeScoreHint = false): string
 {
-    $mainLimit = demonlist_main_list_limit();
-    $extendedLimit = demonlist_extended_list_limit();
-    $firstExtendedRank = $mainLimit + 1;
-
-    if ($extendedLimit < $firstExtendedRank) {
-        return t('list.desc.extended_empty');
-    }
-
-    $description = t('list.desc.extended_range', ['from' => $firstExtendedRank, 'to' => $extendedLimit]);
-    if ($includeScoreHint) {
-        $description .= ' ' . t('list.desc.count_score');
-    }
-
-    return $description . '.';
+    return demonlist_list_description('platformer');
 }
 
 function demonlist_legacy_list_dropdown_description(): string
 {
-    $firstLegacyRank = demonlist_extended_list_limit() + 1;
-    return t('list.desc.legacy', ['from' => $firstLegacyRank]);
+    return demonlist_list_description('challenge');
 }
 
-function demonlist_is_ranked_entry(int $position, bool $legacy): bool
+function demonlist_list_description(string $list): string
 {
-    if ($position < 1) {
-        return false;
-    }
+    $list = demonlist_normalize_list($list);
+    $key = 'list.description.' . $list;
+    return t($key);
+}
 
-    if (demonlist_legacy_counts_for_score()) {
-        return true;
-    }
-
-    if ($legacy) {
-        return false;
-    }
-
-    if ($position > demonlist_extended_list_limit()) {
-        return false;
-    }
-
-    return demonlist_list_bucket($position, $legacy) !== 'legacy';
+function demonlist_is_ranked_entry(int $position, bool $legacy, ?string $listKey = null): bool
+{
+    return $position > 0;
 }
 
 function demonlist_ratedplus_default(): bool
@@ -2269,11 +2226,12 @@ function demonlist_set_ratedplus_enabled(bool $enabled): bool
 
 function demonlist_normalize_list(?string $list): string
 {
-    if (!demonlist_ratedplus_enabled()) {
-        return 'demonlist';
-    }
-
-    return strtolower(trim((string) $list)) === 'ratedplus' ? 'ratedplus' : 'demonlist';
+    return match (strtolower(trim((string) $list))) {
+        'platformer', 'extended' => 'platformer',
+        'incompletion', 'ratedplus', 'rated+' => 'incompletion',
+        'challenge', 'legacy' => 'challenge',
+        default => 'main',
+    };
 }
 
 function demonlist_active_list(): string
@@ -2283,7 +2241,13 @@ function demonlist_active_list(): string
 
 function demonlist_list_label(string $list): string
 {
-    return demonlist_normalize_list($list) === 'demonlist' ? t('list.demonlist') : t('list.ratedplus');
+    $translationKey = match (demonlist_normalize_list($list)) {
+        'platformer' => 'list.extended',
+        'incompletion' => 'list.ratedplus',
+        'challenge' => 'list.legacy',
+        default => 'list.main',
+    };
+    return t($translationKey);
 }
 
 function demonlist_list_url(string $path, string $list, array $params = []): string
@@ -2296,11 +2260,9 @@ function demonlist_list_url(string $path, string $list, array $params = []): str
 
 function demonlist_position_for_list(array $demon, string $list): ?int
 {
-    if (demonlist_normalize_list($list) === 'demonlist') {
-        $position = $demon['rated_position'] ?? null;
-        return $position === null ? null : (int) $position;
+    if (demonlist_normalize_list((string) ($demon['list_key'] ?? 'main')) !== demonlist_normalize_list($list)) {
+        return null;
     }
-
     return (int) ($demon['position'] ?? 0);
 }
 
@@ -2310,13 +2272,12 @@ function demonlist_apply_list_context(array $demons, string $list): array
     $result = [];
 
     foreach ($demons as $demon) {
-        $ratedPlusPosition = (int) ($demon['position'] ?? 0);
         $position = demonlist_position_for_list($demon, $list);
         if ($position === null || $position < 1) {
             continue;
         }
 
-        $demon['ratedplus_position'] = $ratedPlusPosition;
+        $demon['list_key'] = $list;
         $demon['list_position'] = $position;
         $demon['position'] = $position;
         $demon['legacy'] = 0;
@@ -2330,11 +2291,27 @@ function demonlist_apply_list_context(array $demons, string $list): array
 function demonlist_recompute_rated_positions(?PDO $pdo = null): void
 {
     $pdo = $pdo ?? db();
-    $pdo->exec('UPDATE demons SET rated_position = NULL');
-    $rated = $pdo->query('SELECT id FROM demons WHERE COALESCE(rated, 1) = 1 ORDER BY position ASC, id ASC')->fetchAll(PDO::FETCH_COLUMN);
-    $update = $pdo->prepare('UPDATE demons SET rated_position = :position WHERE id = :id');
-    foreach ($rated as $index => $id) {
-        $update->execute([':position' => $index + 1, ':id' => (int) $id]);
+    if (!schema_col_exists($pdo, 'demons', 'list_key')) {
+        return;
+    }
+
+    $lists = ['main', 'platformer', 'incompletion', 'challenge'];
+    foreach ($lists as $listKey) {
+        $rowsStmt = $pdo->prepare('SELECT id, position FROM demons WHERE list_key = :list_key ORDER BY position ASC, id ASC');
+        $rowsStmt->execute([':list_key' => $listKey]);
+        $rows = $rowsStmt->fetchAll();
+        if ($rows === []) {
+            continue;
+        }
+
+        $maxPosition = max(array_map(static fn (array $row): int => (int) $row['position'], $rows));
+        $offset = $maxPosition + count($rows) + 1;
+        $shift = $pdo->prepare('UPDATE demons SET position = position + :offset WHERE list_key = :list_key');
+        $shift->execute([':offset' => $offset, ':list_key' => $listKey]);
+        $update = $pdo->prepare('UPDATE demons SET position = :position WHERE id = :id');
+        foreach ($rows as $index => $row) {
+            $update->execute([':position' => $index + 1, ':id' => (int) $row['id']]);
+        }
     }
 }
 
@@ -2436,23 +2413,21 @@ function demonlist_score(int $position, int $requirement, int $progress): float
 function demonlist_sync_user_points(?PDO $pdo = null): array
 {
     $pdo = $pdo ?? db();
+    if (!schema_table_exists($pdo, 'user_list_points')) {
+        return ['processed_users' => 0, 'updated_users' => 0];
+    }
 
-    $users = $pdo->query('SELECT id, username, points, ratedplus_points, bonus_points FROM users')->fetchAll();
+    $listKeys = ['main', 'platformer', 'incompletion', 'challenge'];
+    $users = $pdo->query('SELECT id, username, points, ratedplus_points FROM users')->fetchAll();
     if ($users === []) {
-        return [
-            'processed_users' => 0,
-            'updated_users' => 0,
-        ];
+        return ['processed_users' => 0, 'updated_users' => 0];
     }
 
     $userIdByName = [];
-    $storedPointsByUserId = [];
-    $storedRatedPlusPointsByUserId = [];
-    $bonusPointsByUserId = [];
-    $completionTotalByUserId = [];
-    $ratedPlusCompletionTotalByUserId = [];
-    $completionScoresByUserId = [];
-    $ratedPlusCompletionScoresByUserId = [];
+    $storedPoints = [];
+    $storedBonuses = [];
+    $completionTotals = [];
+    $completionScores = [];
 
     foreach ($users as $user) {
         $userId = (int) ($user['id'] ?? 0);
@@ -2464,24 +2439,37 @@ function demonlist_sync_user_points(?PDO $pdo = null): array
         if ($username !== '') {
             $userIdByName[strtolower($username)] = $userId;
         }
-
-        $storedPointsByUserId[$userId] = round((float) ($user['points'] ?? 0.0), 2);
-        $storedRatedPlusPointsByUserId[$userId] = round((float) ($user['ratedplus_points'] ?? 0.0), 2);
-        $bonusPointsByUserId[$userId] = round((float) ($user['bonus_points'] ?? 0.0), 2);
-        $completionTotalByUserId[$userId] = 0.0;
-        $ratedPlusCompletionTotalByUserId[$userId] = 0.0;
-        $completionScoresByUserId[$userId] = [];
-        $ratedPlusCompletionScoresByUserId[$userId] = [];
+        foreach ($listKeys as $listKey) {
+            $storedPoints[$userId][$listKey] = 0.0;
+            $storedBonuses[$userId][$listKey] = 0.0;
+            $completionTotals[$userId][$listKey] = 0.0;
+            $completionScores[$userId][$listKey] = [];
+        }
     }
 
-    if ($storedPointsByUserId === []) {
-        return [
-            'processed_users' => 0,
-            'updated_users' => 0,
-        ];
+    if ($storedPoints === []) {
+        return ['processed_users' => 0, 'updated_users' => 0];
     }
 
-    $demons = $pdo->query('SELECT id, position, rated_position, requirement, legacy, verifier, verifier_user_id FROM demons')->fetchAll();
+    $pointRows = $pdo->query('SELECT user_id, list_key, points, bonus_points FROM user_list_points')->fetchAll();
+    foreach ($pointRows as $row) {
+        $userId = (int) ($row['user_id'] ?? 0);
+        $listKey = demonlist_normalize_list((string) ($row['list_key'] ?? 'main'));
+        if (!isset($storedPoints[$userId][$listKey])) {
+            continue;
+        }
+        $storedPoints[$userId][$listKey] = round((float) ($row['points'] ?? 0.0), 2);
+        $storedBonuses[$userId][$listKey] = round((float) ($row['bonus_points'] ?? 0.0), 2);
+    }
+
+    $ensureScoreRow = $pdo->prepare('INSERT IGNORE INTO user_list_points (user_id, list_key) VALUES (:user_id, :list_key)');
+    foreach ($storedPoints as $userId => $_byList) {
+        foreach ($listKeys as $listKey) {
+            $ensureScoreRow->execute([':user_id' => (int) $userId, ':list_key' => $listKey]);
+        }
+    }
+
+    $demons = $pdo->query('SELECT id, list_key, position, requirement, verifier, verifier_user_id FROM demons')->fetchAll();
     $demonById = [];
     foreach ($demons as $demon) {
         $demonId = (int) ($demon['id'] ?? 0);
@@ -2490,16 +2478,15 @@ function demonlist_sync_user_points(?PDO $pdo = null): array
         }
 
         $demonById[$demonId] = [
+            'list_key' => demonlist_normalize_list((string) ($demon['list_key'] ?? 'main')),
             'position' => (int) ($demon['position'] ?? 0),
-            'rated_position' => $demon['rated_position'] !== null ? (int) $demon['rated_position'] : null,
             'requirement' => (int) ($demon['requirement'] ?? 100),
-            'legacy' => (int) ($demon['legacy'] ?? 0),
             'verifier' => trim((string) ($demon['verifier'] ?? '')),
             'verifier_user_id' => (int) ($demon['verifier_user_id'] ?? 0),
         ];
     }
 
-    $completions = $pdo->query('SELECT demon_id, player, progress FROM completions')->fetchAll();
+    $completions = $pdo->query('SELECT demon_id, list_key, player, progress FROM completions')->fetchAll();
     foreach ($completions as $completion) {
         $demonId = (int) ($completion['demon_id'] ?? 0);
         if ($demonId < 1 || !isset($demonById[$demonId])) {
@@ -2512,95 +2499,90 @@ function demonlist_sync_user_points(?PDO $pdo = null): array
         }
 
         $userId = (int) $userIdByName[$playerName];
-        if (!isset($completionTotalByUserId[$userId])) {
+        if (!isset($completionTotals[$userId])) {
             continue;
         }
 
         $demon = $demonById[$demonId];
+        $listKey = demonlist_normalize_list((string) ($completion['list_key'] ?? $demon['list_key']));
+        if ($listKey !== $demon['list_key']) {
+            continue;
+        }
         $progress = max(0, min(100, (int) ($completion['progress'] ?? 0)));
-        $ratedPlusScore = demonlist_score($demon['position'], $demon['requirement'], $progress);
-        $ratedScore = $demon['rated_position'] === null
-            ? 0.0
-            : demonlist_score((int) $demon['rated_position'], $demon['requirement'], $progress);
-
-        $ratedPlusCompletionTotalByUserId[$userId] += $ratedPlusScore;
-        $completionTotalByUserId[$userId] += $ratedScore;
-        $completionScoresByUserId[$userId][$demonId] = $ratedScore;
-        $ratedPlusCompletionScoresByUserId[$userId][$demonId] = $ratedPlusScore;
+        $score = demonlist_score($demon['position'], $demon['requirement'], $progress);
+        $existingScore = (float) ($completionScores[$userId][$listKey][$demonId] ?? 0.0);
+        if ($score > $existingScore) {
+            $completionScores[$userId][$listKey][$demonId] = $score;
+        }
     }
 
-    $verifierBonusByUserId = [];
-    $ratedPlusVerifierBonusByUserId = [];
-    foreach ($storedPointsByUserId as $userId => $_storedPoints) {
-        $verifierBonusByUserId[(int) $userId] = 0.0;
-        $ratedPlusVerifierBonusByUserId[(int) $userId] = 0.0;
+    foreach ($completionScores as $userId => $byList) {
+        foreach ($byList as $listKey => $byDemon) {
+            $completionTotals[$userId][$listKey] = array_sum($byDemon);
+        }
     }
 
+    $verifierBonuses = [];
+    foreach ($storedPoints as $userId => $_byList) {
+        foreach ($listKeys as $listKey) {
+            $verifierBonuses[$userId][$listKey] = 0.0;
+        }
+    }
     foreach ($demonById as $demonId => $demon) {
         $verifierUserId = (int) ($demon['verifier_user_id'] ?? 0);
-        if ($verifierUserId < 1 || !isset($storedPointsByUserId[$verifierUserId])) {
+        if ($verifierUserId < 1 || !isset($storedPoints[$verifierUserId])) {
             $verifierNameKey = strtolower(trim((string) ($demon['verifier'] ?? '')));
             if ($verifierNameKey !== '' && isset($userIdByName[$verifierNameKey])) {
                 $verifierUserId = (int) $userIdByName[$verifierNameKey];
             }
         }
 
-        if ($verifierUserId < 1 || !isset($storedPointsByUserId[$verifierUserId])) {
+        if ($verifierUserId < 1 || !isset($storedPoints[$verifierUserId])) {
             continue;
         }
 
-        $fullRatedPlusScore = demonlist_score((int) $demon['position'], (int) ($demon['requirement'] ?? 100), 100);
-        $existingRatedPlusScore = (float) ($ratedPlusCompletionScoresByUserId[$verifierUserId][$demonId] ?? 0.0);
-        if ($fullRatedPlusScore > $existingRatedPlusScore) {
-            $ratedPlusVerifierBonusByUserId[$verifierUserId] += ($fullRatedPlusScore - $existingRatedPlusScore);
-        }
-        if ($demon['rated_position'] === null) {
-            continue;
-        }
-
-        $fullVerifierScore = demonlist_score((int) $demon['rated_position'], (int) ($demon['requirement'] ?? 100), 100);
-        $existingCompletionScore = (float) ($completionScoresByUserId[$verifierUserId][$demonId] ?? 0.0);
-        if ($fullVerifierScore > $existingCompletionScore) {
-            $verifierBonusByUserId[$verifierUserId] += ($fullVerifierScore - $existingCompletionScore);
+        $listKey = (string) $demon['list_key'];
+        $fullScore = demonlist_score((int) $demon['position'], (int) ($demon['requirement'] ?? 100), 100);
+        $existingScore = (float) ($completionScores[$verifierUserId][$listKey][$demonId] ?? 0.0);
+        if ($fullScore > $existingScore) {
+            $verifierBonuses[$verifierUserId][$listKey] += ($fullScore - $existingScore);
         }
     }
 
-    $updateStmt = $pdo->prepare('UPDATE users SET points = :points, ratedplus_points = :ratedplus_points WHERE id = :id');
-    $updatedUsers = 0;
+    $updateScore = $pdo->prepare('UPDATE user_list_points SET points = :points WHERE user_id = :user_id AND list_key = :list_key');
+    $compatUpdate = $pdo->prepare('UPDATE users SET points = :main_points, ratedplus_points = :incompletion_points WHERE id = :id');
+    $updatedUserIds = [];
     $processedUsers = 0;
 
-    foreach ($storedPointsByUserId as $userId => $storedPoints) {
+    foreach ($storedPoints as $userId => $currentByList) {
         $processedUsers++;
-
-        $newPoints = round(
-            (float) ($completionTotalByUserId[$userId] ?? 0.0)
-            + (float) ($verifierBonusByUserId[$userId] ?? 0.0)
-            + (float) ($bonusPointsByUserId[$userId] ?? 0.0),
-            2
-        );
-
-        $newRatedPlusPoints = round(
-            (float) ($ratedPlusCompletionTotalByUserId[$userId] ?? 0.0)
-            + (float) ($ratedPlusVerifierBonusByUserId[$userId] ?? 0.0)
-            + (float) ($bonusPointsByUserId[$userId] ?? 0.0),
-            2
-        );
-        $storedRatedPlusPoints = (float) ($storedRatedPlusPointsByUserId[$userId] ?? 0.0);
-        if (abs((float) $storedPoints - $newPoints) < 0.01 && abs($storedRatedPlusPoints - $newRatedPlusPoints) < 0.01) {
-            continue;
+        $newByList = [];
+        foreach ($listKeys as $listKey) {
+            $newByList[$listKey] = round(
+                (float) ($completionTotals[$userId][$listKey] ?? 0.0)
+                + (float) ($verifierBonuses[$userId][$listKey] ?? 0.0)
+                + (float) ($storedBonuses[$userId][$listKey] ?? 0.0),
+                2
+            );
+            if (abs((float) ($currentByList[$listKey] ?? 0.0) - $newByList[$listKey]) >= 0.01) {
+                $updatedUserIds[(int) $userId] = true;
+            }
+            $updateScore->execute([
+                ':points' => $newByList[$listKey],
+                ':user_id' => (int) $userId,
+                ':list_key' => $listKey,
+            ]);
         }
-
-        $updateStmt->execute([
-            ':points' => $newPoints,
-            ':ratedplus_points' => $newRatedPlusPoints,
+        $compatUpdate->execute([
+            ':main_points' => $newByList['main'],
+            ':incompletion_points' => $newByList['incompletion'],
             ':id' => $userId,
         ]);
-        $updatedUsers++;
     }
 
     return [
         'processed_users' => $processedUsers,
-        'updated_users' => $updatedUsers,
+        'updated_users' => count($updatedUserIds),
     ];
 }
 

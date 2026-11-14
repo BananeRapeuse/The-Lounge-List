@@ -8,24 +8,11 @@ $pdo = db();
 $activeList = demonlist_active_list();
 $allDemons = demonlist_fetch_all_demons($pdo);
 $listDemons = demonlist_apply_list_context($allDemons, $activeList);
-$parts = demonlist_partition_demons($listDemons, false);
-
-$main = $parts['main'];
-$extended = $parts['extended'];
-$legacy = $parts['legacy'];
-$showExtendedList = demonlist_show_extended_list();
-$showLegacyList = demonlist_show_legacy_list();
 $rouletteStorageScope = (is_logged_in() ? ('user:' . (int) current_user_id()) : 'guest') . ':list:' . $activeList;
 
 $rouletteItems = [];
-foreach ($main as $demon) {
-    $rouletteItems[] = roulette_item_from_demon($demon, 'main', true);
-}
-foreach ($extended as $demon) {
-    $rouletteItems[] = roulette_item_from_demon($demon, 'extended', true);
-}
-foreach ($legacy as $demon) {
-    $rouletteItems[] = roulette_item_from_demon($demon, 'legacy', false);
+foreach ($listDemons as $demon) {
+    $rouletteItems[] = roulette_item_from_demon($demon, $activeList, true);
 }
 
 render_header(t('roulette.title'), 'roulette', [
@@ -38,12 +25,7 @@ render_header(t('roulette.title'), 'roulette', [
 <section class="panel fade m-center roulette-page-intro">
     <h1><?= e(t('roulette.heading')) ?></h1>
     <p><?= e(t('roulette.intro')) ?></p>
-    <div class="stats-viewer-tabs roulette-list-tabs">
-        <?php if (demonlist_ratedplus_enabled()): ?>
-            <a class="button <?= $activeList === 'ratedplus' ? 'blue' : 'white' ?> hover small" href="<?= e(demonlist_list_url('roulette.php', 'ratedplus')) ?>"><?= e(t('list.ratedplus')) ?></a>
-        <?php endif; ?>
-        <a class="button <?= $activeList === 'demonlist' ? 'blue' : 'white' ?> hover small" href="<?= e(demonlist_list_url('roulette.php', 'demonlist')) ?>">Demonlist</a>
-    </div>
+    <p><?= e(demonlist_list_label($activeList)) ?> — <?= e(demonlist_list_description($activeList)) ?></p>
 </section>
 
 <section class="panel fade m-center roulette-panel" id="roulette-panel" data-roulette-storage-scope="<?= e($rouletteStorageScope) ?>">
@@ -64,24 +46,10 @@ render_header(t('roulette.title'), 'roulette', [
     <div class="roulette-toolbar">
         <div class="roulette-list-selector">
             <label class="cb-container roulette-check">
-                <input type="checkbox" data-roulette-bucket="main" checked>
+                <input type="checkbox" data-roulette-bucket="<?= e($activeList) ?>" checked>
                 <span class="checkmark"></span>
-                <?= e(t('list.main')) ?>
+                <?= e(demonlist_list_label($activeList)) ?>
             </label>
-            <?php if ($showExtendedList): ?>
-                <label class="cb-container roulette-check">
-                    <input type="checkbox" data-roulette-bucket="extended" checked>
-                    <span class="checkmark"></span>
-                    <?= e(t('list.extended')) ?>
-                </label>
-            <?php endif; ?>
-            <?php if ($showLegacyList): ?>
-                <label class="cb-container roulette-check">
-                    <input type="checkbox" data-roulette-bucket="legacy">
-                    <span class="checkmark"></span>
-                    <?= e(t('list.legacy')) ?>
-                </label>
-            <?php endif; ?>
         </div>
 
         <div class="homepage-tool-actions roulette-start-actions">

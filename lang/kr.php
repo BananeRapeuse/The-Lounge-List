@@ -92,9 +92,9 @@ return [
     'footer.submit_record' => '기록 제출',
     'footer.rights' => '모든 권리 보유 {app}. {app}은 RobTopGamesAB와 제휴하지 않습니다.',
 
-    'list.main' => '메인 목록',
-    'list.extended' => '확장 목록',
-    'list.legacy' => '레거시 목록',
+    'list.main' => 'Main List',
+    'list.extended' => 'Platformer List',
+    'list.legacy' => 'Challenge List',
     'list.filter' => '필터...',
     'list.filter_shown' => '표시된 데몬 필터링...',
     'list.no_entries' => '이 목록에 항목이 없습니다.',
@@ -215,8 +215,8 @@ return [
     'auth.logout.invalid' => '유효하지 않은 로그아웃 요청입니다.',
     'auth.logout.success' => '로그아웃되었습니다.',
 
-    'home.title' => '메인 목록',
-    'home.heading' => 'Geometry Dash Demonlist',
+    'home.title' => 'Main List',
+    'home.heading' => 'The Lounge List',
     'home.intro_all' => '메인 목록은 현재 섹션 제한 없이 모든 순위 데몬을 표시합니다.',
     'home.intro_default' => 'Demonlist의 메인 목록으로, 게임 내에서 가장 어려운 레벨을 순위로 표시합니다.',
     'home.editors' => '목록 편집자',

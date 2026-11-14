@@ -4,7 +4,8 @@
 
 ## ✨ Fonctionnalités
 
-- **Listes principales** : Main List / Extended List / Legacy List
+- **Listes principales** : Main List / Platformer List / Challenge List
+- **Liste secondaire** : In-Completion List
 - **Détails des niveaux** : Scoring, records et historique des positions
 - **Soumission d'enregistrements** : Validation par la communauté
 - **Panneau d'administration** : Gestion des niveaux, rôles utilisateurs

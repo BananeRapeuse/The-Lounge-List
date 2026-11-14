@@ -92,9 +92,9 @@ return [
     'footer.submit_record' => 'Надіслати запис',
     'footer.rights' => 'Усі права захищено {app}. {app} жодним чином не пов\'язаний з RobTopGamesAB.',
 
-    'list.main' => 'Головний список',
-    'list.extended' => 'Розширений список',
-    'list.legacy' => 'Застарілий список',
+    'list.main' => 'Main List',
+    'list.extended' => 'Platformer List',
+    'list.legacy' => 'Challenge List',
     'list.filter' => 'Фільтр...',
     'list.filter_shown' => 'Фільтрувати показаних демонів...',
     'list.no_entries' => 'Немає записів у цьому списку.',
@@ -215,8 +215,8 @@ return [
     'auth.logout.invalid' => 'Недійсний запит на вихід.',
     'auth.logout.success' => 'Ви вийшли.',
 
-    'home.title' => 'Головний список',
-    'home.heading' => 'Geometry Dash Demonlist',
+    'home.title' => 'Main List',
+    'home.heading' => 'The Lounge List',
     'home.intro_all' => 'Головний список зараз показує всіх ранжованих демонів без обмежень за розділами.',
     'home.intro_default' => 'Головний список Demonlist із ранжованими найскладнішими рівнями в грі.',
     'home.editors' => 'Редактори списку',

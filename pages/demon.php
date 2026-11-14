@@ -98,7 +98,7 @@ function render_demon_dropdown(string $id, string $title, string $description, a
                     <?php
                     $positionedName = demonlist_positioned_name(
                         (int) $demon['position'],
-                        $id === 'legacy',
+                        false,
                         (string) $demon['name']
                     );
                     ?>
@@ -303,34 +303,46 @@ $viewingById = $requestedRank < 1 && $requestedId > 0;
 $rank = $requestedRank;
 
 $hasUserBannedColumn = users_has_is_banned_column();
-$showExtendedList = demonlist_show_extended_list();
-$showLegacyList = demonlist_show_legacy_list();
-
-$allDemons = db()->query('SELECT id, position, rated_position, rated, name, publisher, legacy
+$allDemons = db()->query('SELECT id, list_key, position, name, publisher, legacy
                            FROM demons
                            ORDER BY position ASC')->fetchAll();
 $allDemons = demonlist_apply_list_context($allDemons, $activeList);
+
+if ($viewingById) {
+    $actualListStmt = db()->prepare('SELECT list_key FROM demons WHERE id = :id LIMIT 1');
+    $actualListStmt->execute([':id' => $requestedId]);
+    $actualList = $actualListStmt->fetchColumn();
+    if (is_string($actualList) && $actualList !== '') {
+        $activeList = demonlist_normalize_list($actualList);
+        $allDemons = demonlist_apply_list_context(
+            db()->query('SELECT id, list_key, position, name, publisher, legacy FROM demons ORDER BY position ASC')->fetchAll(),
+            $activeList
+        );
+    }
+}
 
 $demonSelectSql = $hasUserBannedColumn
     ? 'SELECT d.*,
               COUNT(CASE WHEN banned_users.id IS NULL AND c.progress >= 100 THEN c.id END) AS completion_count,
               AVG(CASE WHEN banned_users.id IS NULL THEN c.enjoyment END) AS average_enjoyment
        FROM demons d
-       LEFT JOIN completions c ON c.demon_id = d.id
+       LEFT JOIN completions c ON c.demon_id = d.id AND c.list_key = :completion_list
        LEFT JOIN users banned_users
          ON LOWER(banned_users.username) = LOWER(c.player)
         AND COALESCE(banned_users.is_banned, 0) = 1
-       WHERE ' . ($viewingById ? 'd.id = :id' : ($activeList === 'demonlist' ? 'd.rated_position = :rank' : 'd.position = :rank')) . '
+       WHERE ' . ($viewingById ? 'd.id = :id' : 'd.list_key = :list_key AND d.position = :rank') . '
        GROUP BY d.id'
     : 'SELECT d.*,
               COUNT(CASE WHEN c.progress >= 100 THEN c.id END) AS completion_count,
               AVG(c.enjoyment) AS average_enjoyment
        FROM demons d
-       LEFT JOIN completions c ON c.demon_id = d.id
-       WHERE ' . ($viewingById ? 'd.id = :id' : ($activeList === 'demonlist' ? 'd.rated_position = :rank' : 'd.position = :rank')) . '
+       LEFT JOIN completions c ON c.demon_id = d.id AND c.list_key = :completion_list
+       WHERE ' . ($viewingById ? 'd.id = :id' : 'd.list_key = :list_key AND d.position = :rank') . '
        GROUP BY d.id';
 $stmt = db()->prepare($demonSelectSql);
-$stmt->execute($viewingById ? [':id' => $requestedId] : [':rank' => $rank]);
+$stmt->execute($viewingById
+    ? [':id' => $requestedId, ':list_key' => $activeList, ':completion_list' => $activeList]
+    : [':rank' => $rank, ':list_key' => $activeList, ':completion_list' => $activeList]);
 $demon = $stmt->fetch();
 
 if ($demon !== false) {
@@ -354,11 +366,6 @@ if ($demon === false) {
 }
 
 $rank = (int) ($demon['position'] ?? $rank);
-if ($activeList === 'demonlist') {
-    $demon['ratedplus_position'] = (int) ($demon['position'] ?? 0);
-    $demon['position'] = (int) ($demon['rated_position'] ?? 0);
-    $demon['legacy'] = 0;
-}
 $levelCommentsDisabledMessage = level_comments_disabled_message($demon);
 $demonPosition = (int) ($demon['position'] ?? 0);
 $levelCommentActionPage = max(1, (int) ($_POST['comment_page'] ?? $_GET['comment_page'] ?? 1));
@@ -708,27 +715,7 @@ if (method_is_post()) {
     }
 }
 
-$main = [];
-$extended = [];
-$legacy = [];
-
-foreach ($allDemons as $entry) {
-    $position = (int) $entry['position'];
-    $isLegacy = (int) ($entry['legacy'] ?? 0) === 1;
-    $listBucket = demonlist_list_bucket($position, $isLegacy);
-
-    if ($listBucket === 'main') {
-        $main[] = $entry;
-        continue;
-    }
-
-    if ($listBucket === 'extended') {
-        $extended[] = $entry;
-        continue;
-    }
-
-    $legacy[] = $entry;
-}
+$listDemons = $allDemons;
 
 $prevId = null;
 $nextId = null;
@@ -748,24 +735,24 @@ $completionsSql = $hasUserBannedColumn
     ? 'SELECT c.*, u.country_code, ' . user_select_display_name_expression('u', 'username', 'display_name') . '
        FROM completions c
        LEFT JOIN users u ON LOWER(u.username) = LOWER(c.player)
-       WHERE c.demon_id = :id
+       WHERE c.demon_id = :id AND c.list_key = :list_key
          AND (u.id IS NULL OR COALESCE(u.is_banned, 0) = 0)
        ORDER BY c.progress DESC, COALESCE(c.placement, 999999), c.created_at ASC'
     : 'SELECT c.*, u.country_code, ' . user_select_display_name_expression('u', 'username', 'display_name') . '
        FROM completions c
        LEFT JOIN users u ON LOWER(u.username) = LOWER(c.player)
-       WHERE c.demon_id = :id
+       WHERE c.demon_id = :id AND c.list_key = :list_key
        ORDER BY c.progress DESC, COALESCE(c.placement, 999999), c.created_at ASC';
 $completionsStmt = db()->prepare($completionsSql);
-$completionsStmt->execute([':id' => $id]);
+$completionsStmt->execute([':id' => $id, ':list_key' => $activeList]);
 $completions = $completionsStmt->fetchAll();
 
 $historyStmt = db()->prepare('SELECT created_at, old_position, new_position, note
                               FROM demon_position_history
-                              WHERE demon_id = :demon_id
+                              WHERE demon_id = :demon_id AND list_key = :list_key
                               ORDER BY created_at DESC, id DESC
                               LIMIT 250');
-$historyStmt->execute([':demon_id' => $id]);
+$historyStmt->execute([':demon_id' => $id, ':list_key' => $activeList]);
 $positionHistory = demon_position_history_groups(array_reverse($historyStmt->fetchAll()));
 
 $currentCommentUserId = is_logged_in() ? (int) current_user_id() : 0;
@@ -912,22 +899,16 @@ $thumbStyle = css_background_image($thumbUrl);
 
 $position = (int) $demon['position'];
 $requirement = (int) $demon['requirement'];
-$isLegacy = (int) ($demon['legacy'] ?? 0) === 1;
-$showDemonPoints = demonlist_is_ranked_entry($position, $isLegacy);
+$showDemonPoints = demonlist_is_ranked_entry($position, false, $activeList);
 $minimumScore = $showDemonPoints ? number_format(pointercrate_score($position, $requirement, $requirement), 2) : '0.00';
 $fullScore = $showDemonPoints ? number_format(pointercrate_score($position, $requirement, 100), 2) : '0.00';
 $averageEnjoyment = $demon['average_enjoyment'] !== null
     ? number_format((float) $demon['average_enjoyment'], 2)
     : null;
-$currentBucket = demonlist_list_bucket($position, $isLegacy);
-$legacyRankContext = $currentBucket === 'legacy' || $isLegacy;
-$positionLabel = demonlist_position_label($position, $legacyRankContext);
-$positionedName = demonlist_positioned_name($position, $legacyRankContext, (string) $demon['name']);
-$category = match ($currentBucket) {
-    'extended' => t('list.extended'),
-    'legacy' => t('list.legacy'),
-    default => t('list.main'),
-};
+$currentBucket = $activeList;
+$positionLabel = demonlist_position_label($position, false);
+$positionedName = demonlist_positioned_name($position, false, (string) $demon['name']);
+$category = demonlist_list_label($activeList);
 $creator = demon_creator_name($demon);
 $publisher = trim((string) ($demon['publisher'] ?? ''));
 $verifier = trim((string) ($demon['verifier'] ?? ''));
@@ -998,18 +979,7 @@ render_header((string) $demon['name'], 'list', [
 ?>
 
 <nav class="flex wrap m-center fade" id="lists" style="text-align: center;">
-    <?php
-    $mainListDescription = demonlist_main_list_dropdown_description($showExtendedList, $showLegacyList);
-    $extendedListDescription = demonlist_extended_list_dropdown_description(true);
-    $legacyListDescription = demonlist_legacy_list_dropdown_description();
-    ?>
-    <?php render_demon_dropdown('mainlist', t('list.main'), $mainListDescription, $main, $id); ?>
-    <?php if ($showExtendedList): ?>
-        <?php render_demon_dropdown('extended', t('list.extended'), $extendedListDescription, $extended, $id); ?>
-    <?php endif; ?>
-    <?php if ($showLegacyList): ?>
-        <?php render_demon_dropdown('legacy', t('list.legacy'), $legacyListDescription, $legacy, $id); ?>
-    <?php endif; ?>
+    <?php render_demon_dropdown($activeList, demonlist_list_label($activeList), demonlist_list_description($activeList), $listDemons, $id); ?>
 </nav>
 
 <div class="flex m-center container">
@@ -1024,7 +994,7 @@ render_header((string) $demon['name'], 'list', [
                 <div class="demon-hero-content">
                     <h1 class="demon-hero-title">
                         <?= e($positionedName) ?>
-                        <?php if ($activeList === 'ratedplus' && (int) ($demon['rated'] ?? 0) !== 1): ?><span class="ratedplus-level-badge"><?= e(t('list.ratedplus_badge')) ?></span><?php endif; ?>
+                        <?php if ($activeList === 'incompletion'): ?><span class="ratedplus-level-badge"><?= e(t('list.ratedplus_badge')) ?></span><?php endif; ?>
                     </h1>
                     <p class="demon-hero-byline">
                         <?= e(t('demon.byline_by')) ?> <?= render_creator_credit($demon) ?>, <?= e(t('list.published_by')) ?> <?= render_player_role_link($publisher, $publisherUserId > 0 ? $publisherUserId : null) ?><?php if ($verifier !== ''): ?>, <?= e(t('list.verified_by')) ?> <?= render_player_role_link($verifier, $verifierUserId > 0 ? $verifierUserId : null) ?><?php endif; ?>

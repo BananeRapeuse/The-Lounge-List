@@ -92,9 +92,9 @@ return [
     'footer.submit_record' => '記録を送信',
     'footer.rights' => 'All rights reserved {app}。{app} は RobTopGamesAB と一切提携していません。',
 
-    'list.main' => 'メインリスト',
-    'list.extended' => '拡張リスト',
-    'list.legacy' => 'レガシーリスト',
+    'list.main' => 'Main List',
+    'list.extended' => 'Platformer List',
+    'list.legacy' => 'Challenge List',
     'list.filter' => 'フィルター...',
     'list.filter_shown' => '表示するデーモンをフィルター...',
     'list.no_entries' => 'このリストにはエントリがありません。',
@@ -215,8 +215,8 @@ return [
     'auth.logout.invalid' => '無効なログアウト要求です。',
     'auth.logout.success' => 'ログアウトしました。',
 
-    'home.title' => 'メインリスト',
-    'home.heading' => 'Geometry Dash Demonlist',
+    'home.title' => 'Main List',
+    'home.heading' => 'The Lounge List',
     'home.intro_all' => 'メインリストには現在、すべてのランク付けされたデーモンがセクション制限なしで表示されています。',
     'home.intro_default' => 'Demonlist のメインリスト。ゲーム内でランク付けされた最も難しいレベルを掲載しています。',
     'home.editors' => 'リスト編集者',

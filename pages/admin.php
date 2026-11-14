@@ -5,15 +5,21 @@ require dirname(__DIR__) . '/bootstrap.php';
 require_once dirname(__DIR__) . '/includes/updater.php';
 
 
-function record_position_event(PDO $pdo, int $demonId, ?int $oldPosition, int $newPosition, ?int $changedByUserId, ?string $note = null): void
+function record_position_event(PDO $pdo, int $demonId, ?int $oldPosition, int $newPosition, ?int $changedByUserId, ?string $note = null, ?string $listKey = null): void
 {
+    if ($listKey === null) {
+        $listStmt = $pdo->prepare('SELECT list_key FROM demons WHERE id = :id LIMIT 1');
+        $listStmt->execute([':id' => $demonId]);
+        $listKey = demonlist_normalize_list((string) ($listStmt->fetchColumn() ?: 'main'));
+    }
     $stmt = $pdo->prepare('INSERT INTO demon_position_history
-        (demon_id, old_position, new_position, changed_by_user_id, note)
+        (demon_id, list_key, old_position, new_position, changed_by_user_id, note)
         VALUES
-        (:demon_id, :old_position, :new_position, :changed_by_user_id, :note)');
+        (:demon_id, :list_key, :old_position, :new_position, :changed_by_user_id, :note)');
 
     $stmt->execute([
         ':demon_id' => $demonId,
+        ':list_key' => $listKey,
         ':old_position' => $oldPosition,
         ':new_position' => $newPosition,
         ':changed_by_user_id' => $changedByUserId,
@@ -22,7 +28,7 @@ function record_position_event(PDO $pdo, int $demonId, ?int $oldPosition, int $n
 }
 
 /** @param array<int, array{id: mixed, position: mixed}> $shiftedDemons */
-function record_position_shift_events(PDO $pdo, array $shiftedDemons, int $shift, ?int $changedByUserId, string $note): void
+function record_position_shift_events(PDO $pdo, array $shiftedDemons, int $shift, ?int $changedByUserId, string $note, ?string $listKey = null): void
 {
     foreach ($shiftedDemons as $shiftedDemon) {
         $demonId = (int) ($shiftedDemon['id'] ?? 0);
@@ -31,7 +37,7 @@ function record_position_shift_events(PDO $pdo, array $shiftedDemons, int $shift
             continue;
         }
 
-        record_position_event($pdo, $demonId, $oldPosition, $oldPosition + $shift, $changedByUserId, $note);
+        record_position_event($pdo, $demonId, $oldPosition, $oldPosition + $shift, $changedByUserId, $note, $listKey);
     }
 }
 
@@ -1585,6 +1591,7 @@ if (method_is_post()) {
         $name = trim((string) ($_POST['name'] ?? ''));
         $difficulty = trim((string) ($_POST['difficulty'] ?? 'Extreme Demon'));
         $positionInput = trim((string) ($_POST['position'] ?? ''));
+        $listKey = demonlist_normalize_list((string) ($_POST['list_key'] ?? 'main'));
         $requirement = (int) ($_POST['requirement'] ?? 100);
         $creatorsInput = trim((string) ($_POST['creators'] ?? ''));
         $creatorParts = admin_creator_parts_from_input($creatorsInput);
@@ -1597,8 +1604,8 @@ if (method_is_post()) {
         $levelLength = trim((string) ($_POST['level_length'] ?? ''));
         $song = trim((string) ($_POST['song'] ?? ''));
         $objectCountInput = trim((string) ($_POST['object_count'] ?? ''));
-        $legacy = isset($_POST['legacy']) ? 1 : 0;
-        $rated = isset($_POST['rated']) ? 1 : 0;
+        $legacy = $listKey === 'challenge' ? 1 : 0;
+        $rated = $listKey === 'incompletion' ? 0 : 1;
         $commentsDisabled = isset($_POST['comments_disabled']) ? 1 : 0;
         $customLevelInfoUpdates = demon_level_info_custom_value_updates_from_post(
             $_POST['custom_level_info'] ?? [],
@@ -1655,7 +1662,9 @@ if (method_is_post()) {
                 throw new RuntimeException('A level with this exact name (including letter case) already exists.');
             }
 
-            $maxPosition = (int) $pdo->query('SELECT COALESCE(MAX(position), 0) FROM demons')->fetchColumn();
+            $maxStmt = $pdo->prepare('SELECT COALESCE(MAX(position), 0) FROM demons WHERE list_key = :list_key');
+            $maxStmt->execute([':list_key' => $listKey]);
+            $maxPosition = (int) $maxStmt->fetchColumn();
             $shiftedDemons = [];
 
             if ($positionInput !== '') {
@@ -1667,25 +1676,27 @@ if (method_is_post()) {
                     throw new RuntimeException('Position cannot be greater than ' . ($maxPosition + 1) . '.');
                 }
 
-                $shiftedStmt = $pdo->prepare('SELECT id, position FROM demons WHERE position >= :position ORDER BY position ASC');
-                $shiftedStmt->execute([':position' => $position]);
+                $shiftedStmt = $pdo->prepare('SELECT id, position FROM demons WHERE list_key = :list_key AND position >= :position ORDER BY position ASC');
+                $shiftedStmt->execute([':list_key' => $listKey, ':position' => $position]);
                 $shiftedDemons = $shiftedStmt->fetchAll();
 
                 $positionOffset = $maxPosition + 1;
 
                 $lift = $pdo->prepare('UPDATE demons
                     SET position = position + :offset
-                    WHERE position >= :position');
+                    WHERE list_key = :list_key AND position >= :position');
                 $lift->execute([
                     ':offset' => $positionOffset,
+                    ':list_key' => $listKey,
                     ':position' => $position,
                 ]);
 
                 $drop = $pdo->prepare('UPDATE demons
                     SET position = position - :shift
-                    WHERE position >= :lifted_from');
+                    WHERE list_key = :list_key AND position >= :lifted_from');
                 $drop->execute([
                     ':shift' => $positionOffset - 1,
+                    ':list_key' => $listKey,
                     ':lifted_from' => $position + $positionOffset,
                 ]);
             } else {
@@ -1696,11 +1707,12 @@ if (method_is_post()) {
             $verifierUserId = admin_user_id_by_username($pdo, $verifier);
 
             $insert = $pdo->prepare('INSERT INTO demons
-                (position, name, difficulty, requirement, creator, creator_more, publisher, publisher_user_id, verifier, verifier_user_id, description, video_url, thumbnail_url, level_id, level_length, song, object_count, legacy, rated, comments_disabled)
+                (list_key, position, name, difficulty, requirement, creator, creator_more, publisher, publisher_user_id, verifier, verifier_user_id, description, video_url, thumbnail_url, level_id, level_length, song, object_count, legacy, rated, comments_disabled)
                 VALUES
-                (:position, :name, :difficulty, :requirement, :creator, :creator_more, :publisher, :publisher_user_id, :verifier, :verifier_user_id, :description, :video_url, :thumbnail_url, :level_id, :level_length, :song, :object_count, :legacy, :rated, :comments_disabled)');
+                (:list_key, :position, :name, :difficulty, :requirement, :creator, :creator_more, :publisher, :publisher_user_id, :verifier, :verifier_user_id, :description, :video_url, :thumbnail_url, :level_id, :level_length, :song, :object_count, :legacy, :rated, :comments_disabled)');
 
             $insert->execute([
+                ':list_key' => $listKey,
                 ':position' => $position,
                 ':name' => $name,
                 ':difficulty' => $difficulty !== '' ? $difficulty : 'Extreme Demon',
@@ -1735,8 +1747,8 @@ if (method_is_post()) {
 
             demon_tag_sync_for_demon($pdo, $newDemonId, demon_tag_parse_ids_from_input($_POST['tag_ids'] ?? []));
 
-            record_position_event($pdo, $newDemonId, null, $position, current_user_id(), 'Level added');
-            record_position_shift_events($pdo, $shiftedDemons, 1, current_user_id(), $name . ' was added above');
+            record_position_event($pdo, $newDemonId, null, $position, current_user_id(), 'Level added', $listKey);
+            record_position_shift_events($pdo, $shiftedDemons, 1, current_user_id(), $name . ' was added above', $listKey);
             demonlist_recompute_rated_positions($pdo);
             demonlist_sync_user_points($pdo);
 
@@ -1880,7 +1892,10 @@ if (method_is_post()) {
 
             $demonId = (int) $target['id'];
             $oldPosition = (int) $target['position'];
-            $maxPosition = (int) $pdo->query('SELECT COALESCE(MAX(position), 0) FROM demons')->fetchColumn();
+            $listKey = demonlist_normalize_list((string) ($target['list_key'] ?? 'main'));
+            $maxPositionStmt = $pdo->prepare('SELECT COALESCE(MAX(position), 0) FROM demons WHERE list_key = :list_key');
+            $maxPositionStmt->execute([':list_key' => $listKey]);
+            $maxPosition = (int) $maxPositionStmt->fetchColumn();
 
             $beforeLevelData = [
                 'id' => $demonId,
@@ -2001,59 +2016,65 @@ if (method_is_post()) {
             if ($newPosition !== $oldPosition) {
                 $shiftedStmt = $pdo->prepare(
                     $newPosition < $oldPosition
-                        ? 'SELECT id, position FROM demons WHERE position >= :new_position AND position < :old_position ORDER BY position ASC'
-                        : 'SELECT id, position FROM demons WHERE position > :old_position AND position <= :new_position ORDER BY position ASC'
+                        ? 'SELECT id, position FROM demons WHERE list_key = :list_key AND position >= :new_position AND position < :old_position ORDER BY position ASC'
+                        : 'SELECT id, position FROM demons WHERE list_key = :list_key AND position > :old_position AND position <= :new_position ORDER BY position ASC'
                 );
                 $shiftedStmt->execute([
+                    ':list_key' => $listKey,
                     ':new_position' => $newPosition,
                     ':old_position' => $oldPosition,
                 ]);
                 $shiftedDemons = $shiftedStmt->fetchAll();
                 $positionOffset = $maxPosition + 1;
 
-                $parkTarget = $pdo->prepare('UPDATE demons SET position = :temporary_position WHERE id = :id');
+                $parkTarget = $pdo->prepare('UPDATE demons SET position = :temporary_position WHERE id = :id AND list_key = :list_key');
                 $parkTarget->execute([
                     ':temporary_position' => $positionOffset,
                     ':id' => $demonId,
+                    ':list_key' => $listKey,
                 ]);
 
                 if ($newPosition < $oldPosition) {
                     $lift = $pdo->prepare('UPDATE demons
                         SET position = position + :offset
-                        WHERE position >= :new_position
+                        WHERE list_key = :list_key AND position >= :new_position
                           AND position < :old_position');
                     $lift->execute([
                         ':offset' => $positionOffset,
+                        ':list_key' => $listKey,
                         ':new_position' => $newPosition,
                         ':old_position' => $oldPosition,
                     ]);
 
                     $drop = $pdo->prepare('UPDATE demons
                         SET position = position - :shift
-                        WHERE position >= :lifted_from
+                        WHERE list_key = :list_key AND position >= :lifted_from
                           AND position < :lifted_to');
                     $drop->execute([
                         ':shift' => $positionOffset - 1,
+                        ':list_key' => $listKey,
                         ':lifted_from' => $newPosition + $positionOffset,
                         ':lifted_to' => $oldPosition + $positionOffset,
                     ]);
                 } else {
                     $lift = $pdo->prepare('UPDATE demons
                         SET position = position + :offset
-                        WHERE position > :old_position
+                        WHERE list_key = :list_key AND position > :old_position
                           AND position <= :new_position');
                     $lift->execute([
                         ':offset' => $positionOffset,
+                        ':list_key' => $listKey,
                         ':old_position' => $oldPosition,
                         ':new_position' => $newPosition,
                     ]);
 
                     $drop = $pdo->prepare('UPDATE demons
                         SET position = position - :shift
-                        WHERE position > :lifted_from
+                        WHERE list_key = :list_key AND position > :lifted_from
                           AND position <= :lifted_to');
                     $drop->execute([
                         ':shift' => $positionOffset + 1,
+                        ':list_key' => $listKey,
                         ':lifted_from' => $oldPosition + $positionOffset,
                         ':lifted_to' => $newPosition + $positionOffset,
                     ]);
@@ -2219,6 +2240,7 @@ if (method_is_post()) {
             $demonId = (int) $target['id'];
             $demonName = (string) $target['name'];
             $oldPosition = (int) $target['position'];
+            $listKey = demonlist_normalize_list((string) ($target['list_key'] ?? 'main'));
 
             if (strcasecmp($confirmNameInput, $demonName) !== 0) {
                 throw new RuntimeException('Confirmation does not match the selected level name.');
@@ -2227,7 +2249,9 @@ if (method_is_post()) {
             $recordsStmt = $pdo->prepare('SELECT COUNT(*) FROM completions WHERE demon_id = :id');
             $recordsStmt->execute([':id' => $demonId]);
             $recordsRemoved = (int) $recordsStmt->fetchColumn();
-            $maxPosition = (int) $pdo->query('SELECT COALESCE(MAX(position), 0) FROM demons')->fetchColumn();
+            $maxPositionStmt = $pdo->prepare('SELECT COALESCE(MAX(position), 0) FROM demons WHERE list_key = :list_key');
+            $maxPositionStmt->execute([':list_key' => $listKey]);
+            $maxPosition = (int) $maxPositionStmt->fetchColumn();
 
             $deleteRecords = $pdo->prepare('DELETE FROM completions WHERE demon_id = :id');
             $deleteRecords->execute([':id' => $demonId]);
@@ -2243,17 +2267,19 @@ if (method_is_post()) {
 
                 $lift = $pdo->prepare('UPDATE demons
                     SET position = position + :offset
-                    WHERE position > :old_position');
+                    WHERE list_key = :list_key AND position > :old_position');
                 $lift->execute([
                     ':offset' => $positionOffset,
+                    ':list_key' => $listKey,
                     ':old_position' => $oldPosition,
                 ]);
 
                 $drop = $pdo->prepare('UPDATE demons
                     SET position = position - :shift
-                    WHERE position > :lifted_from');
+                    WHERE list_key = :list_key AND position > :lifted_from');
                 $drop->execute([
                     ':shift' => $positionOffset + 1,
+                    ':list_key' => $listKey,
                     ':lifted_from' => $oldPosition + $positionOffset,
                 ]);
             }
@@ -2327,7 +2353,7 @@ if (method_is_post()) {
                 $demonId = (int) $matchId;
             }
 
-            $targetStmt = $pdo->prepare('SELECT id, name, position FROM demons WHERE id = :id LIMIT 1 FOR UPDATE');
+            $targetStmt = $pdo->prepare('SELECT id, list_key, name, position FROM demons WHERE id = :id LIMIT 1 FOR UPDATE');
             $targetStmt->execute([':id' => $demonId]);
             $target = $targetStmt->fetch();
 
@@ -2336,7 +2362,10 @@ if (method_is_post()) {
             }
 
             $oldPosition = (int) $target['position'];
-            $maxPosition = (int) $pdo->query('SELECT COALESCE(MAX(position), 0) FROM demons')->fetchColumn();
+            $listKey = demonlist_normalize_list((string) ($target['list_key'] ?? 'main'));
+            $maxPositionStmt = $pdo->prepare('SELECT COALESCE(MAX(position), 0) FROM demons WHERE list_key = :list_key');
+            $maxPositionStmt->execute([':list_key' => $listKey]);
+            $maxPosition = (int) $maxPositionStmt->fetchColumn();
 
             if ($newPosition > $maxPosition) {
                 throw new RuntimeException('New position cannot exceed ' . $maxPosition . '.');
@@ -2345,68 +2374,75 @@ if (method_is_post()) {
             if ($newPosition !== $oldPosition) {
                 $shiftedStmt = $pdo->prepare(
                     $newPosition < $oldPosition
-                        ? 'SELECT id, position FROM demons WHERE position >= :new_position AND position < :old_position ORDER BY position ASC'
-                        : 'SELECT id, position FROM demons WHERE position > :old_position AND position <= :new_position ORDER BY position ASC'
+                        ? 'SELECT id, position FROM demons WHERE list_key = :list_key AND position >= :new_position AND position < :old_position ORDER BY position ASC'
+                        : 'SELECT id, position FROM demons WHERE list_key = :list_key AND position > :old_position AND position <= :new_position ORDER BY position ASC'
                 );
                 $shiftedStmt->execute([
+                    ':list_key' => $listKey,
                     ':new_position' => $newPosition,
                     ':old_position' => $oldPosition,
                 ]);
                 $shiftedDemons = $shiftedStmt->fetchAll();
                 $positionOffset = $maxPosition + 1;
 
-                $parkTarget = $pdo->prepare('UPDATE demons SET position = :temporary_position WHERE id = :id');
+                $parkTarget = $pdo->prepare('UPDATE demons SET position = :temporary_position WHERE id = :id AND list_key = :list_key');
                 $parkTarget->execute([
                     ':temporary_position' => $positionOffset,
                     ':id' => $demonId,
+                    ':list_key' => $listKey,
                 ]);
 
                 if ($newPosition < $oldPosition) {
                     $lift = $pdo->prepare('UPDATE demons
                         SET position = position + :offset
-                        WHERE position >= :new_position
+                        WHERE list_key = :list_key AND position >= :new_position
                           AND position < :old_position');
                     $lift->execute([
                         ':offset' => $positionOffset,
+                        ':list_key' => $listKey,
                         ':new_position' => $newPosition,
                         ':old_position' => $oldPosition,
                     ]);
 
                     $drop = $pdo->prepare('UPDATE demons
                         SET position = position - :shift
-                        WHERE position >= :lifted_from
+                        WHERE list_key = :list_key AND position >= :lifted_from
                           AND position < :lifted_to');
                     $drop->execute([
                         ':shift' => $positionOffset - 1,
+                        ':list_key' => $listKey,
                         ':lifted_from' => $newPosition + $positionOffset,
                         ':lifted_to' => $oldPosition + $positionOffset,
                     ]);
                 } else {
                     $lift = $pdo->prepare('UPDATE demons
                         SET position = position + :offset
-                        WHERE position > :old_position
+                        WHERE list_key = :list_key AND position > :old_position
                           AND position <= :new_position');
                     $lift->execute([
                         ':offset' => $positionOffset,
+                        ':list_key' => $listKey,
                         ':old_position' => $oldPosition,
                         ':new_position' => $newPosition,
                     ]);
 
                     $drop = $pdo->prepare('UPDATE demons
                         SET position = position - :shift
-                        WHERE position > :lifted_from
+                        WHERE list_key = :list_key AND position > :lifted_from
                           AND position <= :lifted_to');
                     $drop->execute([
                         ':shift' => $positionOffset + 1,
+                        ':list_key' => $listKey,
                         ':lifted_from' => $oldPosition + $positionOffset,
                         ':lifted_to' => $newPosition + $positionOffset,
                     ]);
                 }
 
-                $updateTarget = $pdo->prepare('UPDATE demons SET position = :position WHERE id = :id');
+                $updateTarget = $pdo->prepare('UPDATE demons SET position = :position WHERE id = :id AND list_key = :list_key');
                 $updateTarget->execute([
                     ':position' => $newPosition,
                     ':id' => $demonId,
+                    ':list_key' => $listKey,
                 ]);
 
                 record_position_event(
@@ -2415,14 +2451,16 @@ if (method_is_post()) {
                     $oldPosition,
                     $newPosition,
                     current_user_id(),
-                    $note !== '' ? $note : 'Position moved in admin panel'
+                    $note !== '' ? $note : 'Position moved in admin panel',
+                    $listKey
                 );
                 record_position_shift_events(
                     $pdo,
                     $shiftedDemons,
                     $newPosition < $oldPosition ? 1 : -1,
                     current_user_id(),
-                    (string) $target['name'] . ($newPosition < $oldPosition ? ' was moved above' : ' was moved below')
+                    (string) $target['name'] . ($newPosition < $oldPosition ? ' was moved above' : ' was moved below'),
+                    $listKey
                 );
                 demonlist_recompute_rated_positions($pdo);
                 demonlist_sync_user_points($pdo);
@@ -2491,6 +2529,7 @@ if (method_is_post()) {
         $isBanned = $isBannedInput === '1' ? 1 : 0;
         $commentsDisabled = $commentsDisabledInput === '1' ? 1 : 0;
         $bonusDelta = round((float) $bonusInput, 2);
+        $bonusListKey = demonlist_normalize_list((string) ($_POST['bonus_list'] ?? 'main'));
         if ($bonusDelta < -999999 || $bonusDelta > 999999) {
             flash('error', 'Bonus value is out of range.');
             redirect($redirectTarget);
@@ -2533,13 +2572,22 @@ if (method_is_post()) {
                 }
             }
 
-            $currentBonus = round((float) ($target['bonus_points'] ?? 0.0), 2);
+            $scoreRowStmt = $pdo->prepare('SELECT points, bonus_points FROM user_list_points WHERE user_id = :user_id AND list_key = :list_key LIMIT 1 FOR UPDATE');
+            $scoreRowStmt->execute([':user_id' => $userId, ':list_key' => $bonusListKey]);
+            $scoreRow = $scoreRowStmt->fetch();
+            if ($scoreRow === false) {
+                $insertScoreRow = $pdo->prepare('INSERT IGNORE INTO user_list_points (user_id, list_key) VALUES (:user_id, :list_key)');
+                $insertScoreRow->execute([':user_id' => $userId, ':list_key' => $bonusListKey]);
+                $scoreRowStmt->execute([':user_id' => $userId, ':list_key' => $bonusListKey]);
+                $scoreRow = $scoreRowStmt->fetch() ?: ['points' => 0, 'bonus_points' => 0];
+            }
+            $currentBonus = round((float) ($scoreRow['bonus_points'] ?? 0.0), 2);
             $newBonus = round($currentBonus + $bonusDelta, 2);
             if ($newBonus < -999999 || $newBonus > 999999) {
                 throw new RuntimeException('Bonus points value is out of range after applying changes.');
             }
 
-            $currentPoints = round((float) ($target['points'] ?? 0.0), 2);
+            $currentPoints = round((float) ($scoreRow['points'] ?? 0.0), 2);
             $newPoints = round($currentPoints + $bonusDelta, 2);
 
             $beforeUserData = [
@@ -2555,17 +2603,19 @@ if (method_is_post()) {
             $updateUser = $pdo->prepare('UPDATE users
                                          SET role = :role,
                                              is_banned = :is_banned,
-                                             comments_disabled = :comments_disabled,
-                                             bonus_points = :bonus_points,
-                                             points = ROUND(COALESCE(points, 0.00) + :bonus_delta, 2)
+                                             comments_disabled = :comments_disabled
                                          WHERE id = :id');
             $updateUser->execute([
                 ':role' => $role,
                 ':is_banned' => $isBanned,
                 ':comments_disabled' => $commentsDisabled,
-                ':bonus_points' => $newBonus,
-                ':bonus_delta' => $bonusDelta,
                 ':id' => $userId,
+            ]);
+            $updateScoreRow = $pdo->prepare('UPDATE user_list_points SET bonus_points = :bonus_points WHERE user_id = :user_id AND list_key = :list_key');
+            $updateScoreRow->execute([
+                ':bonus_points' => $newBonus,
+                ':user_id' => $userId,
+                ':list_key' => $bonusListKey,
             ]);
 
             $afterUserData = [
@@ -2579,6 +2629,7 @@ if (method_is_post()) {
             ];
 
             $pdo->commit();
+            demonlist_sync_user_points($pdo);
             admin_notify_user_updated($beforeUserData, $afterUserData, $bonusDelta);
 
             flash('success', 'Updated user settings for ' . (string) $target['username'] . '. Bonus delta: ' . ($bonusDelta >= 0 ? '+' : '') . number_format($bonusDelta, 2) . '.');
@@ -2746,13 +2797,18 @@ if (method_is_post()) {
                     throw new RuntimeException('Demon submissions are disabled. Add levels manually from the admin form.');
                 }
 
-                $demonStmt = $pdo->prepare('SELECT id FROM demons WHERE LOWER(name) = LOWER(:name) LIMIT 1');
+                $demonStmt = $pdo->prepare('SELECT id, list_key FROM demons WHERE LOWER(name) = LOWER(:name) LIMIT 1');
                 $demonStmt->execute([':name' => (string) $submission['demon_name']]);
-                $demonId = $demonStmt->fetchColumn();
+                $targetDemon = $demonStmt->fetch();
 
-                if ($demonId === false) {
+                if ($targetDemon === false) {
                     throw new RuntimeException('Cannot approve completion: demon not found.');
                 }
+                if (demonlist_normalize_list((string) ($targetDemon['list_key'] ?? 'main'))
+                    !== demonlist_normalize_list((string) ($submission['list_key'] ?? 'main'))) {
+                    throw new RuntimeException('Cannot approve completion: the submission list does not match the level list.');
+                }
+                $demonId = (int) $targetDemon['id'];
 
                 $progress = max(1, min(100, (int) ($submission['progress'] ?? 100)));
                 $submittedEnjoyment = $submission['enjoyment'] !== null ? max(0, min(10, (int) $submission['enjoyment'])) : null;
@@ -2760,9 +2816,10 @@ if (method_is_post()) {
                 $submittedVideo = valid_http_url($candidateVideo) ? $candidateVideo : '#';
                 $submittedNotes = trim((string) ($submission['notes'] ?? ''));
 
-                $existingStmt = $pdo->prepare('SELECT id, progress, enjoyment, video_url, notes, placement FROM completions WHERE demon_id = :demon_id AND player = :player LIMIT 1');
+                $existingStmt = $pdo->prepare('SELECT id, progress, enjoyment, video_url, notes, placement FROM completions WHERE demon_id = :demon_id AND list_key = :list_key AND player = :player LIMIT 1');
                 $existingStmt->execute([
-                    ':demon_id' => (int) $demonId,
+                    ':demon_id' => $demonId,
+                    ':list_key' => demonlist_normalize_list((string) ($submission['list_key'] ?? 'main')),
                     ':player' => $submissionPlayer,
                 ]);
                 $existing = $existingStmt->fetch();
@@ -2850,17 +2907,21 @@ if (method_is_post()) {
                 } else {
                     $placementStmt = $pdo->prepare('SELECT COALESCE(MAX(placement), 0) + 1 AS next_placement
                                                     FROM completions
-                                                    WHERE demon_id = :demon_id');
-                    $placementStmt->execute([':demon_id' => (int) $demonId]);
+                                                    WHERE demon_id = :demon_id AND list_key = :list_key');
+                    $placementStmt->execute([
+                        ':demon_id' => $demonId,
+                        ':list_key' => demonlist_normalize_list((string) ($submission['list_key'] ?? 'main')),
+                    ]);
                     $nextPlacement = (int) $placementStmt->fetchColumn();
 
                     $insertCompletion = $pdo->prepare('INSERT INTO completions
-                        (demon_id, player, video_url, progress, enjoyment, placement, notes)
+                        (demon_id, list_key, player, video_url, progress, enjoyment, placement, notes)
                         VALUES
-                        (:demon_id, :player, :video_url, :progress, :enjoyment, :placement, :notes)');
+                        (:demon_id, :list_key, :player, :video_url, :progress, :enjoyment, :placement, :notes)');
 
                     $insertCompletion->execute([
-                        ':demon_id' => (int) $demonId,
+                        ':demon_id' => $demonId,
+                        ':list_key' => demonlist_normalize_list((string) ($submission['list_key'] ?? 'main')),
                         ':player' => $submissionPlayer,
                         ':video_url' => $submittedVideo,
                         ':progress' => $progress,
@@ -4228,6 +4289,15 @@ render_header(t('admin.title'), 'admin');
             </label>
         </div>
 
+        <label class="field">
+            <span>Liste</span>
+            <select name="list_key" required>
+                <?php foreach (['main', 'platformer', 'incompletion', 'challenge'] as $listKey): ?>
+                    <option value="<?= e($listKey) ?>"><?= e(demonlist_list_label($listKey)) ?></option>
+                <?php endforeach; ?>
+            </select>
+        </label>
+
         <div class="detail-grid" style="grid-template-columns: 1fr 1fr;">
             <label class="field">
                 <span><?= e(t('admin.creators')) ?></span>
@@ -4319,18 +4389,6 @@ render_header(t('admin.title'), 'admin');
                 </div>
             </div>
         <?php endif; ?>
-
-        <label class="cb-container" style="text-align: left; margin-top: 6px;">
-            <input type="checkbox" name="legacy" value="1">
-            <span class="checkmark"></span>
-            <?= e(t('admin.mark_legacy')) ?>
-        </label>
-
-        <label class="cb-container" style="text-align: left; margin-top: 6px;">
-            <input type="checkbox" name="rated" value="1" checked>
-            <span class="checkmark"></span>
-            Rated in Geometry Dash (included in Demonlist)
-        </label>
 
         <label class="cb-container" style="text-align: left; margin-top: 6px;">
             <input type="checkbox" name="comments_disabled" value="1">
@@ -4652,6 +4710,14 @@ render_header(t('admin.title'), 'admin');
                                         <span><?= e(t('admin.bonus_adjust')) ?></span>
                                         <input type="number" name="bonus_delta" step="0.01" value="0" placeholder="+10 or -5">
                                     </label>
+                                    <label class="admin-user-edit-field">
+                                        <span>Liste des points</span>
+                                        <select name="bonus_list">
+                                            <?php foreach (['main', 'platformer', 'incompletion', 'challenge'] as $bonusListKey): ?>
+                                                <option value="<?= e($bonusListKey) ?>"><?= e(demonlist_list_label($bonusListKey)) ?></option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                    </label>
                                 </div>
 
                                 <button class="button blue hover small" type="submit"><?= e(t('common.save')) ?></button>
@@ -4762,7 +4828,7 @@ render_header(t('admin.title'), 'admin');
 
             <dl class="key-value compact">
                 <div><dt><?= e(t('common.submitter')) ?></dt><dd><?= e((string) ($item['submitter_username'] ?: $item['player'] ?: t('common.unknown'))) ?></dd></div>
-                <div><dt><?= e(t('common.demon')) ?></dt><dd><?= e((string) $item['demon_name']) ?></dd></div>
+                <div><dt><?= e(t('common.demon')) ?></dt><dd><?= e(demonlist_list_label((string) ($item['list_key'] ?? 'main'))) ?> · <?= e((string) $item['demon_name']) ?></dd></div>
                 <div><dt><?= e(t('common.progress')) ?></dt><dd><?= $item['progress'] !== null ? (int) $item['progress'] . '%' : '-' ?></dd></div>
                 <div><dt><?= e(t('common.enjoyment')) ?></dt><dd><?= $item['enjoyment'] !== null ? (int) $item['enjoyment'] . '/10' : '-' ?></dd></div>
                 <div><dt><?= e(t('common.platform')) ?></dt><dd><?= e((string) ($item['platform'] ?: '-')) ?></dd></div>
@@ -4802,6 +4868,7 @@ render_header(t('admin.title'), 'admin');
                 <tr>
                     <th>ID</th>
                     <th><?= e(t('common.type')) ?></th>
+                    <th>Liste</th>
                     <th><?= e(t('common.demon')) ?></th>
                     <th><?= e(t('common.submitter')) ?></th>
                     <th><?= e(t('common.status')) ?></th>
@@ -4810,12 +4877,13 @@ render_header(t('admin.title'), 'admin');
             </thead>
             <tbody>
                 <?php if ($reviewed === []): ?>
-                    <tr><td colspan="6" class="muted"><?= e(t('admin.no_reviewed_submissions')) ?></td></tr>
+                    <tr><td colspan="7" class="muted"><?= e(t('admin.no_reviewed_submissions')) ?></td></tr>
                 <?php endif; ?>
                 <?php foreach ($reviewed as $item): ?>
                     <tr>
                         <td>#<?= (int) $item['id'] ?></td>
                         <td><?= e((string) $item['type']) ?></td>
+                        <td><?= e(demonlist_list_label((string) ($item['list_key'] ?? 'main'))) ?></td>
                         <td><?= e((string) $item['demon_name']) ?></td>
                         <td><?= e((string) ($item['submitter_username'] ?: $item['player'] ?: '-')) ?></td>
                         <td><span class="badge <?= $item['status'] === 'approved' ? 'success' : 'error' ?>"><?= e(status_label((string) $item['status'])) ?></span></td>
