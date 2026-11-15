@@ -72,6 +72,35 @@ function admin_generate_temporary_password(int $length = 14): string
     return $password;
 }
 
+function admin_write_app_config(array $config): void
+{
+    $configPath = (string) ($GLOBALS['app_config_path'] ?? '');
+    if ($configPath === '' || !is_file($configPath) || !is_writable($configPath)) {
+        throw new RuntimeException('config.php is not writable by the web server.');
+    }
+
+    $source = "<?php\ndeclare(strict_types=1);\n\nreturn " . var_export($config, true) . ";\n";
+    $temporaryPath = $configPath . '.tmp.' . bin2hex(random_bytes(6));
+    $permissions = @fileperms($configPath);
+    try {
+        if (file_put_contents($temporaryPath, $source, LOCK_EX) === false) {
+            throw new RuntimeException('Could not write the temporary configuration file.');
+        }
+        if ($permissions !== false) {
+            @chmod($temporaryPath, $permissions & 0777);
+        }
+        if (!@rename($temporaryPath, $configPath)) {
+            throw new RuntimeException('Could not replace config.php.');
+        }
+    } finally {
+        if (is_file($temporaryPath)) {
+            @unlink($temporaryPath);
+        }
+    }
+
+    $GLOBALS['app_config'] = $config;
+}
+
 function admin_column_exists(PDO $pdo, string $table, string $column): bool
 {
     $stmt = $pdo->prepare(
@@ -716,6 +745,230 @@ function admin_notify_submission_submitter_discord(array $submission, string $de
 
 if (method_is_post()) {
     $action = (string) ($_POST['action'] ?? '');
+
+    if ($action === 'save_site_settings') {
+        if (!has_owner_access()) {
+            flash('error', t('flash.no_permission'));
+            redirect(admin_section_url('admin-site-settings'));
+        }
+        if (!validate_csrf($_POST['_token'] ?? null)) {
+            flash('error', t('flash.invalid_token'));
+            redirect(admin_section_url('admin-site-settings'));
+        }
+
+        try {
+            $currentConfig = $GLOBALS['app_config'] ?? [];
+            if (!is_array($currentConfig)) {
+                throw new RuntimeException('The current configuration is invalid.');
+            }
+            $appConfig = is_array($currentConfig['app'] ?? null) ? $currentConfig['app'] : [];
+            $dbConfig = is_array($currentConfig['db'] ?? null) ? $currentConfig['db'] : [];
+            $discordConfig = is_array($currentConfig['discord'] ?? null) ? $currentConfig['discord'] : [];
+            $emailConfig = is_array($currentConfig['email'] ?? null) ? $currentConfig['email'] : [];
+            $securityConfig = is_array($currentConfig['security'] ?? null) ? $currentConfig['security'] : [];
+
+            $name = trim((string) ($_POST['app_name'] ?? ''));
+            $tagline = trim((string) ($_POST['app_tagline'] ?? ''));
+            $baseUrl = trim((string) ($_POST['app_base_url'] ?? ''));
+            $publicUrl = trim((string) ($_POST['app_public_url'] ?? ''));
+            $timezone = trim((string) ($_POST['app_timezone'] ?? 'UTC'));
+            $defaultLanguage = trim((string) ($_POST['app_default_language'] ?? 'fr'));
+            if ($name === '') {
+                throw new RuntimeException(t('admin.site_settings_name_required'));
+            }
+            if ($publicUrl !== '' && filter_var($publicUrl, FILTER_VALIDATE_URL) === false) {
+                throw new RuntimeException(t('admin.site_settings_url_invalid'));
+            }
+            try {
+                new DateTimeZone($timezone);
+            } catch (Throwable) {
+                throw new RuntimeException(t('admin.site_settings_timezone_invalid'));
+            }
+            if (!is_supported_language($defaultLanguage)) {
+                throw new RuntimeException(t('admin.site_settings_language_invalid'));
+            }
+
+            $dbHost = trim((string) ($_POST['db_host'] ?? ''));
+            $dbPortInput = trim((string) ($_POST['db_port'] ?? ''));
+            $dbName = trim((string) ($_POST['db_name'] ?? ''));
+            $dbUsername = trim((string) ($_POST['db_username'] ?? ''));
+            $dbPassword = (string) ($_POST['db_password'] ?? '');
+            $dbPassword = $dbPassword !== '' ? $dbPassword : (string) ($dbConfig['password'] ?? '');
+            $dbPort = filter_var($dbPortInput, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 65535]]);
+            if ($dbHost === '' || $dbName === '' || $dbUsername === '' || $dbPort === false) {
+                throw new RuntimeException(t('admin.site_settings_database_invalid'));
+            }
+            // Validate new database credentials before committing them, to avoid locking out the site.
+            new PDO(
+                'mysql:host=' . $dbHost . ';port=' . $dbPort . ';dbname=' . $dbName . ';charset=utf8mb4',
+                $dbUsername,
+                $dbPassword,
+                [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
+            );
+
+            $discordWebhookUrl = trim((string) ($_POST['discord_webhook_url'] ?? ''));
+            $discordBotToken = (string) ($_POST['discord_bot_token'] ?? '');
+            $discordBotToken = $discordBotToken !== '' ? $discordBotToken : (string) ($discordConfig['bot_token'] ?? '');
+            $discordApiUrl = trim((string) ($_POST['discord_bot_api_base_url'] ?? ''));
+            $discordWidgetUrl = trim((string) ($_POST['discord_server_widget_url'] ?? ''));
+            foreach ([$discordWebhookUrl, $discordApiUrl, $discordWidgetUrl] as $optionalUrl) {
+                if ($optionalUrl !== '' && filter_var($optionalUrl, FILTER_VALIDATE_URL) === false) {
+                    throw new RuntimeException(t('admin.site_settings_url_invalid'));
+                }
+            }
+            if ($discordApiUrl === '') {
+                $discordApiUrl = 'https://discord.com/api/v10';
+            }
+            $discordServerTheme = (string) ($_POST['discord_server_theme'] ?? 'dark');
+            if (!in_array($discordServerTheme, ['dark', 'light'], true)) {
+                $discordServerTheme = 'dark';
+            }
+            $discordServerId = preg_replace('/\D+/', '', (string) ($_POST['discord_server_id'] ?? '')) ?? '';
+
+            $captchaEnabled = isset($_POST['captcha_enabled']);
+            $recaptchaSiteKey = trim((string) ($_POST['recaptcha_site_key'] ?? ''));
+            $recaptchaSecretKey = (string) ($_POST['recaptcha_secret_key'] ?? '');
+            $recaptchaSecretKey = $recaptchaSecretKey !== '' ? $recaptchaSecretKey : (string) ($securityConfig['recaptcha_secret_key'] ?? '');
+            if ($captchaEnabled && ($recaptchaSiteKey === '' || $recaptchaSecretKey === '' || preg_match('/^[A-Za-z0-9_-]{20,}$/', $recaptchaSiteKey) !== 1)) {
+                throw new RuntimeException(t('admin.site_settings_recaptcha_invalid'));
+            }
+
+            $emailEnabled = isset($_POST['email_enabled']);
+            $smtpHost = trim((string) ($_POST['smtp_host'] ?? ''));
+            $smtpPortInput = trim((string) ($_POST['smtp_port'] ?? '587'));
+            $smtpPort = filter_var($smtpPortInput, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 65535]]);
+            $smtpEncryption = (string) ($_POST['smtp_encryption'] ?? 'tls');
+            if (!in_array($smtpEncryption, ['tls', 'ssl', 'none'], true)) {
+                $smtpEncryption = 'tls';
+            }
+            $smtpUsername = trim((string) ($_POST['smtp_username'] ?? ''));
+            $smtpPassword = (string) ($_POST['smtp_password'] ?? '');
+            $smtpPassword = $smtpPassword !== '' ? $smtpPassword : (string) ($emailConfig['smtp_password'] ?? '');
+            $emailFromAddress = trim((string) ($_POST['email_from_address'] ?? ''));
+            $emailFromName = trim((string) ($_POST['email_from_name'] ?? ''));
+            if ($emailEnabled && ($smtpHost === '' || $emailFromAddress === '' || $smtpPort === false || filter_var($emailFromAddress, FILTER_VALIDATE_EMAIL) === false)) {
+                throw new RuntimeException(t('admin.site_settings_email_invalid'));
+            }
+            if (!$emailEnabled && $smtpPort === false) {
+                $smtpPort = 587;
+            }
+
+            $currentConfig['app'] = array_replace($appConfig, [
+                'name' => $name,
+                'tagline' => $tagline,
+                'base_url' => '/' . trim($baseUrl, '/'),
+                'public_url' => $publicUrl,
+                'timezone' => $timezone,
+                'default_language' => $defaultLanguage,
+            ]);
+            $currentConfig['db'] = array_replace($dbConfig, [
+                'host' => $dbHost,
+                'port' => (int) $dbPort,
+                'database' => $dbName,
+                'username' => $dbUsername,
+                'password' => $dbPassword,
+                'charset' => 'utf8mb4',
+            ]);
+            $currentConfig['discord'] = array_replace($discordConfig, [
+                'webhook_url' => $discordWebhookUrl,
+                'bot_token' => $discordBotToken,
+                'bot_api_base_url' => $discordApiUrl,
+                'server_widget_url' => $discordWidgetUrl,
+                'server_id' => $discordServerId,
+                'server_theme' => $discordServerTheme,
+            ]);
+            $currentConfig['email'] = array_replace($emailConfig, [
+                'enabled' => $emailEnabled,
+                'smtp_host' => $smtpHost,
+                'smtp_port' => (int) $smtpPort,
+                'smtp_encryption' => $smtpEncryption,
+                'smtp_username' => $smtpUsername,
+                'smtp_password' => $smtpPassword,
+                'from_address' => $emailFromAddress,
+                'from_name' => $emailFromName !== '' ? $emailFromName : $name,
+            ]);
+            $currentConfig['security'] = array_replace($securityConfig, [
+                'captcha_enabled' => $captchaEnabled,
+                'setup_captcha_enabled' => $captchaEnabled,
+                'captcha_login_enabled' => $captchaEnabled,
+                'captcha_register_enabled' => $captchaEnabled,
+                'captcha_submit_enabled' => $captchaEnabled,
+                'captcha_driver' => 'google_recaptcha_v2',
+                'recaptcha_site_key' => $recaptchaSiteKey,
+                'recaptcha_secret_key' => $recaptchaSecretKey,
+                'recaptcha_verify_url' => 'https://www.google.com/recaptcha/api/siteverify',
+                'session_cookie_secure' => strtolower((string) parse_url($publicUrl, PHP_URL_SCHEME)) === 'https',
+            ]);
+
+            admin_write_app_config($currentConfig);
+            flash('success', t('admin.site_settings_saved'));
+        } catch (Throwable $throwable) {
+            flash('error', $throwable->getMessage());
+        }
+        redirect(admin_section_url('admin-site-settings'));
+    }
+
+    if ($action === 'save_owner_account_settings') {
+        if (!has_owner_access()) {
+            flash('error', t('flash.no_permission'));
+            redirect(admin_section_url('admin-site-settings'));
+        }
+        if (!validate_csrf($_POST['_token'] ?? null)) {
+            flash('error', t('flash.invalid_token'));
+            redirect(admin_section_url('admin-site-settings'));
+        }
+
+        try {
+            $userId = current_user_id();
+            $username = trim((string) ($_POST['owner_username'] ?? ''));
+            $email = trim((string) ($_POST['owner_email'] ?? ''));
+            $newPassword = (string) ($_POST['owner_password'] ?? '');
+            $passwordConfirm = (string) ($_POST['owner_password_confirm'] ?? '');
+            if ($userId === null || preg_match('/^[A-Za-z0-9_.-]{3,40}$/', $username) !== 1) {
+                throw new RuntimeException(t('admin.site_settings_owner_username_invalid'));
+            }
+            if ($email !== '' && filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+                throw new RuntimeException(t('admin.site_settings_owner_email_invalid'));
+            }
+            if ($newPassword !== '' && strlen($newPassword) < 8) {
+                throw new RuntimeException(t('admin.site_settings_owner_password_short'));
+            }
+            if (!hash_equals($newPassword, $passwordConfirm)) {
+                throw new RuntimeException(t('admin.site_settings_owner_password_mismatch'));
+            }
+
+            $pdo = db();
+            $duplicate = $pdo->prepare('SELECT id FROM users WHERE LOWER(username) = LOWER(:username) AND id <> :id LIMIT 1');
+            $duplicate->execute([':username' => $username, ':id' => $userId]);
+            if ($duplicate->fetchColumn()) {
+                throw new RuntimeException(t('admin.site_settings_owner_username_taken'));
+            }
+            if ($email !== '') {
+                $duplicateEmail = $pdo->prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(:email) AND id <> :id LIMIT 1');
+                $duplicateEmail->execute([':email' => $email, ':id' => $userId]);
+                if ($duplicateEmail->fetchColumn()) {
+                    throw new RuntimeException(t('admin.site_settings_owner_email_taken'));
+                }
+            }
+            $updateSql = 'UPDATE users SET username = :username, email = :email';
+            $parameters = [
+                ':username' => $username,
+                ':email' => $email !== '' ? $email : null,
+                ':id' => $userId,
+            ];
+            if ($newPassword !== '') {
+                $updateSql .= ', password_hash = :password_hash';
+                $parameters[':password_hash'] = password_hash($newPassword, PASSWORD_DEFAULT);
+            }
+            $updateSql .= ' WHERE id = :id AND role = "owner"';
+            $update = $pdo->prepare($updateSql);
+            $update->execute($parameters);
+            flash('success', t('admin.site_settings_owner_saved'));
+        } catch (Throwable $throwable) {
+            flash('error', $throwable->getMessage());
+        }
+        redirect(admin_section_url('admin-site-settings'));
+    }
 
     if (in_array($action, [
         'save_update_source',
@@ -3033,6 +3286,7 @@ $canManageTags = can_manage_levels();
 $canModerateLevelComments = can_moderate_level_comments();
 $canResetPasswords = can_reset_passwords();
 $canManageUpdates = has_owner_access();
+$canManageSiteSettings = has_owner_access();
 
 $hasGeneralQuickActions = $canManageLevels
     || $canManageUsers
@@ -3041,13 +3295,14 @@ $hasGeneralQuickActions = $canManageLevels
     || $canReviewSubmissions
     || $canManageBadges
     || $canModerateLevelComments;
-$hasOwnerOnlyQuickActions = $canManageRolePermissions || $canManageListVisibility || $canManageUpdates;
+$hasOwnerOnlyQuickActions = $canManageRolePermissions || $canManageListVisibility || $canManageUpdates || $canManageSiteSettings;
 
 $sectionCapability = [
     'admin-role-permissions'     => $canManageRolePermissions,
     'admin-list-visibility'      => $canManageListVisibility,
     'admin-scoring'              => $canManageScoring,
     'admin-updates'              => $canManageUpdates,
+    'admin-site-settings'        => $canManageSiteSettings,
     'admin-level-info-rows'      => $canManageLevels,
     'admin-level-comments'       => $canManageLevels || $canModerateLevelComments,
     'admin-claims'               => $canClaimContributors,
@@ -3427,6 +3682,13 @@ render_header(t('admin.title'), 'admin');
                             <span class="admin-action-meta"><?= e(t('admin.restricted_meta')) ?></span>
                         </a>
                     <?php endif; ?>
+                    <?php if ($canManageSiteSettings): ?>
+                        <a class="admin-action-tile is-owner<?= $activeSection === 'admin-site-settings' ? ' is-active' : '' ?>" href="<?= e(admin_section_url('admin-site-settings')) ?>">
+                            <span class="admin-action-title"><?= e(t('admin.site_settings')) ?></span>
+                            <small><?= e(t('admin.site_settings_desc')) ?></small>
+                            <span class="admin-action-meta"><?= e(t('admin.restricted_meta')) ?></span>
+                        </a>
+                    <?php endif; ?>
                 </div>
             </div>
         <?php endif; ?>
@@ -3590,6 +3852,130 @@ render_header(t('admin.title'), 'admin');
     <?php elseif ($updateRepository === ''): ?>
         <p class="muted admin-update-message"><?= e(t('admin.updates_configure_first')) ?></p>
     <?php endif; ?>
+</section>
+<?php endif; ?>
+
+<?php if ($activeSection === 'admin-site-settings'): ?>
+<?php
+$siteSettings = is_array($GLOBALS['app_config'] ?? null) ? $GLOBALS['app_config'] : [];
+$siteApp = is_array($siteSettings['app'] ?? null) ? $siteSettings['app'] : [];
+$siteDb = is_array($siteSettings['db'] ?? null) ? $siteSettings['db'] : [];
+$siteDiscord = is_array($siteSettings['discord'] ?? null) ? $siteSettings['discord'] : [];
+$siteEmail = is_array($siteSettings['email'] ?? null) ? $siteSettings['email'] : [];
+$siteSecurity = is_array($siteSettings['security'] ?? null) ? $siteSettings['security'] : [];
+$siteOwner = current_user() ?? [];
+?>
+<section class="panel fade admin-tool-section" id="admin-site-settings">
+    <div class="panel-head">
+        <h2><?= e(t('admin.site_settings')) ?></h2>
+        <p><?= e(t('admin.site_settings_intro')) ?></p>
+    </div>
+
+    <form class="stack-form" method="post" action="<?= e(admin_section_url('admin-site-settings')) ?>">
+        <input type="hidden" name="_token" value="<?= e(csrf_token()) ?>">
+        <input type="hidden" name="action" value="save_site_settings">
+
+        <h3><?= e(t('setup.section_list')) ?></h3>
+        <div class="detail-grid">
+            <label class="form-input"><span><?= e(t('setup.name')) ?></span><input name="app_name" value="<?= e((string) ($siteApp['name'] ?? '')) ?>" required></label>
+            <label class="form-input"><span><?= e(t('setup.timezone')) ?></span><input name="app_timezone" value="<?= e((string) ($siteApp['timezone'] ?? 'UTC')) ?>" required></label>
+        </div>
+        <label class="form-input"><span><?= e(t('setup.tagline')) ?></span><input name="app_tagline" value="<?= e((string) ($siteApp['tagline'] ?? '')) ?>"></label>
+        <div class="detail-grid">
+            <label class="form-input"><span><?= e(t('setup.base_url')) ?></span><input name="app_base_url" value="<?= e((string) ($siteApp['base_url'] ?? '')) ?>" placeholder="/"></label>
+            <label class="form-input"><span><?= e(t('setup.public_url')) ?></span><input type="url" name="app_public_url" value="<?= e((string) ($siteApp['public_url'] ?? '')) ?>"></label>
+        </div>
+        <label class="form-input"><span><?= e(t('setup.default_language')) ?></span>
+            <select name="app_default_language" required>
+                <?php foreach (supported_languages() as $languageCode => $languageInfo): ?>
+                    <option value="<?= e($languageCode) ?>" <?= (string) ($siteApp['default_language'] ?? 'fr') === $languageCode ? 'selected' : '' ?>><?= e($languageInfo['name']) ?></option>
+                <?php endforeach; ?>
+            </select>
+        </label>
+
+        <h3><?= e(t('setup.section_database')) ?></h3>
+        <p class="muted"><?= e(t('admin.site_settings_database_hint')) ?></p>
+        <div class="detail-grid">
+            <label class="form-input"><span><?= e(t('setup.db_host')) ?></span><input name="db_host" value="<?= e((string) ($siteDb['host'] ?? 'localhost')) ?>" required></label>
+            <label class="form-input"><span><?= e(t('setup.db_port')) ?></span><input type="number" min="1" max="65535" name="db_port" value="<?= e((string) ($siteDb['port'] ?? 3306)) ?>" required></label>
+        </div>
+        <div class="detail-grid">
+            <label class="form-input"><span><?= e(t('setup.db_name')) ?></span><input name="db_name" value="<?= e((string) ($siteDb['database'] ?? '')) ?>" required></label>
+            <label class="form-input"><span><?= e(t('setup.db_user')) ?></span><input name="db_username" value="<?= e((string) ($siteDb['username'] ?? '')) ?>" required></label>
+        </div>
+        <label class="form-input"><span><?= e(t('setup.db_password')) ?></span><input type="password" name="db_password" autocomplete="new-password"></label>
+
+        <h3><?= e(t('setup.section_discord')) ?></h3>
+        <label class="form-input"><span><?= e(t('setup.discord_webhook_url')) ?></span><input type="url" name="discord_webhook_url" value="<?= e((string) ($siteDiscord['webhook_url'] ?? '')) ?>"></label>
+        <label class="form-input"><span><?= e(t('setup.discord_bot_token')) ?></span><input type="password" name="discord_bot_token" autocomplete="new-password"></label>
+        <label class="form-input"><span><?= e(t('setup.discord_bot_api_base_url')) ?></span><input type="url" name="discord_bot_api_base_url" value="<?= e((string) ($siteDiscord['bot_api_base_url'] ?? 'https://discord.com/api/v10')) ?>"></label>
+        <div class="detail-grid">
+            <label class="form-input"><span><?= e(t('setup.discord_server_widget_url')) ?></span><input type="url" name="discord_server_widget_url" value="<?= e((string) ($siteDiscord['server_widget_url'] ?? '')) ?>"></label>
+            <label class="form-input"><span><?= e(t('setup.discord_server_id')) ?></span><input name="discord_server_id" value="<?= e((string) ($siteDiscord['server_id'] ?? '')) ?>"></label>
+        </div>
+        <label class="form-input"><span><?= e(t('setup.discord_server_theme')) ?></span>
+            <select name="discord_server_theme">
+                <option value="dark" <?= (string) ($siteDiscord['server_theme'] ?? 'dark') === 'dark' ? 'selected' : '' ?>><?= e(t('setup.discord_theme_dark')) ?></option>
+                <option value="light" <?= (string) ($siteDiscord['server_theme'] ?? 'dark') === 'light' ? 'selected' : '' ?>><?= e(t('setup.discord_theme_light')) ?></option>
+            </select>
+        </label>
+
+        <h3><?= e(t('setup.section_security')) ?></h3>
+        <label class="cb-container" style="text-align:left">
+            <input type="checkbox" name="captcha_enabled" value="1" <?= !empty($siteSecurity['captcha_enabled']) ? 'checked' : '' ?>>
+            <span class="checkmark"></span>
+            <?= e(t('admin.site_settings_captcha_enabled')) ?>
+        </label>
+        <div class="detail-grid">
+            <label class="form-input"><span><?= e(t('setup.recaptcha_site_key')) ?></span><input name="recaptcha_site_key" value="<?= e((string) ($siteSecurity['recaptcha_site_key'] ?? '')) ?>" autocomplete="off"></label>
+            <label class="form-input"><span><?= e(t('setup.recaptcha_secret_key')) ?></span><input type="password" name="recaptcha_secret_key" autocomplete="new-password"></label>
+        </div>
+
+        <h3><?= e(t('setup.section_email')) ?></h3>
+        <label class="cb-container" style="text-align:left">
+            <input type="checkbox" name="email_enabled" value="1" <?= !empty($siteEmail['enabled']) ? 'checked' : '' ?>>
+            <span class="checkmark"></span>
+            <?= e(t('setup.email_enable')) ?>
+        </label>
+        <div class="detail-grid">
+            <label class="form-input"><span><?= e(t('setup.smtp_host')) ?></span><input name="smtp_host" value="<?= e((string) ($siteEmail['smtp_host'] ?? '')) ?>"></label>
+            <label class="form-input"><span><?= e(t('setup.smtp_port')) ?></span><input type="number" min="1" max="65535" name="smtp_port" value="<?= e((string) ($siteEmail['smtp_port'] ?? 587)) ?>"></label>
+        </div>
+        <label class="form-input"><span><?= e(t('setup.smtp_encryption')) ?></span>
+            <select name="smtp_encryption">
+                <option value="tls" <?= (string) ($siteEmail['smtp_encryption'] ?? 'tls') === 'tls' ? 'selected' : '' ?>><?= e(t('setup.smtp_encryption_tls')) ?></option>
+                <option value="ssl" <?= (string) ($siteEmail['smtp_encryption'] ?? 'tls') === 'ssl' ? 'selected' : '' ?>><?= e(t('setup.smtp_encryption_ssl')) ?></option>
+                <option value="none" <?= (string) ($siteEmail['smtp_encryption'] ?? 'tls') === 'none' ? 'selected' : '' ?>><?= e(t('setup.smtp_encryption_none')) ?></option>
+            </select>
+        </label>
+        <div class="detail-grid">
+            <label class="form-input"><span><?= e(t('setup.smtp_username')) ?></span><input name="smtp_username" value="<?= e((string) ($siteEmail['smtp_username'] ?? '')) ?>" autocomplete="off"></label>
+            <label class="form-input"><span><?= e(t('setup.smtp_password')) ?></span><input type="password" name="smtp_password" autocomplete="new-password"></label>
+        </div>
+        <div class="detail-grid">
+            <label class="form-input"><span><?= e(t('setup.email_from_address')) ?></span><input type="email" name="email_from_address" value="<?= e((string) ($siteEmail['from_address'] ?? '')) ?>"></label>
+            <label class="form-input"><span><?= e(t('setup.email_from_name')) ?></span><input name="email_from_name" value="<?= e((string) ($siteEmail['from_name'] ?? '')) ?>"></label>
+        </div>
+
+        <button class="button blue hover" type="submit"><?= e(t('admin.site_settings_save')) ?></button>
+    </form>
+
+    <hr>
+    <h3><?= e(t('setup.section_owner')) ?></h3>
+    <p class="muted"><?= e(t('admin.site_settings_owner_hint')) ?></p>
+    <form class="stack-form" method="post" action="<?= e(admin_section_url('admin-site-settings')) ?>">
+        <input type="hidden" name="_token" value="<?= e(csrf_token()) ?>">
+        <input type="hidden" name="action" value="save_owner_account_settings">
+        <div class="detail-grid">
+            <label class="form-input"><span><?= e(t('setup.owner_name')) ?></span><input name="owner_username" value="<?= e((string) ($siteOwner['username'] ?? '')) ?>" minlength="3" maxlength="40" required></label>
+            <label class="form-input"><span><?= e(t('setup.owner_email')) ?></span><input type="email" name="owner_email" value="<?= e((string) ($siteOwner['email'] ?? '')) ?>"></label>
+        </div>
+        <div class="detail-grid">
+            <label class="form-input"><span><?= e(t('setup.owner_password')) ?></span><input type="password" name="owner_password" autocomplete="new-password"></label>
+            <label class="form-input"><span><?= e(t('setup.owner_password_confirm')) ?></span><input type="password" name="owner_password_confirm" autocomplete="new-password"></label>
+        </div>
+        <button class="button blue hover" type="submit"><?= e(t('admin.site_settings_owner_save')) ?></button>
+    </form>
 </section>
 <?php endif; ?>
 
