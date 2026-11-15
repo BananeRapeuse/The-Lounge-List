@@ -802,4 +802,12 @@ return [
     'admin.site_settings_owner_username_taken' => 'Ce nom d’utilisateur est déjà utilisé.',
     'admin.site_settings_owner_email_taken' => 'Cette adresse e-mail est déjà utilisée.',
     'admin.site_settings_owner_save_failed' => 'Impossible de mettre à jour le compte propriétaire.',
+    'admin.delete_user' => 'Supprimer le compte',
+    'admin.user_delete_confirm' => 'Supprimer définitivement le compte de {user} ? Ses commentaires, badges et progression seront supprimés. L’historique de ses soumissions sera conservé.',
+    'admin.user_delete_protected' => 'Tu ne peux pas supprimer ton propre compte depuis cette page.',
+    'admin.user_delete_not_found' => 'Ce compte utilisateur est introuvable.',
+    'admin.user_delete_confirmation_mismatch' => 'La confirmation ne correspond pas au nom d’utilisateur.',
+    'admin.user_delete_last_owner' => 'Impossible de supprimer le dernier compte propriétaire.',
+    'admin.user_delete_failed' => 'La suppression du compte a échoué.',
+    'admin.user_deleted' => 'Le compte de {user} a été supprimé. Son historique de soumissions est conservé.',
 ];

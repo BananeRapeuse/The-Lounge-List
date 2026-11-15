@@ -2738,6 +2738,68 @@ if (method_is_post()) {
         redirect(admin_section_url('admin-edit-level'));
     }
 
+    if ($action === 'delete_user') {
+        $usersQueryRedirect = trim((string) ($_POST['users_q'] ?? ''));
+        $redirectTarget = admin_section_url(
+            'admin-user-management',
+            $usersQueryRedirect !== '' ? ['users_q' => $usersQueryRedirect] : []
+        );
+
+        if (!has_owner_access()) {
+            flash('error', t('flash.no_permission'));
+            redirect($redirectTarget);
+        }
+
+        if (!validate_csrf($_POST['_token'] ?? null)) {
+            flash('error', t('flash.invalid_token'));
+            redirect($redirectTarget);
+        }
+
+        $userId = (int) ($_POST['user_id'] ?? 0);
+        $confirmedUsername = trim((string) ($_POST['confirm_username'] ?? ''));
+        if ($userId < 1 || $userId === current_user_id()) {
+            flash('error', t('admin.user_delete_protected'));
+            redirect($redirectTarget);
+        }
+
+        $pdo = db();
+        try {
+            $pdo->beginTransaction();
+            $userStmt = $pdo->prepare('SELECT id, username, role FROM users WHERE id = :id LIMIT 1 FOR UPDATE');
+            $userStmt->execute([':id' => $userId]);
+            $target = $userStmt->fetch();
+            if ($target === false) {
+                throw new RuntimeException(t('admin.user_delete_not_found'));
+            }
+            $targetUsername = (string) $target['username'];
+            if ($confirmedUsername === '' || !hash_equals($targetUsername, $confirmedUsername)) {
+                throw new RuntimeException(t('admin.user_delete_confirmation_mismatch'));
+            }
+            if (normalize_user_role((string) $target['role']) === 'owner') {
+                $ownerRows = $pdo->query('SELECT id FROM users WHERE role = "owner" FOR UPDATE')->fetchAll();
+                if (count($ownerRows) <= 1) {
+                    throw new RuntimeException(t('admin.user_delete_last_owner'));
+                }
+            }
+
+            // Foreign keys cascade private account data and detach historical attribution where configured.
+            $delete = $pdo->prepare('DELETE FROM users WHERE id = :id');
+            $delete->execute([':id' => $userId]);
+            if ($delete->rowCount() !== 1) {
+                throw new RuntimeException(t('admin.user_delete_failed'));
+            }
+            $pdo->commit();
+            flash('success', t('admin.user_deleted', ['user' => $targetUsername]));
+        } catch (Throwable $throwable) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            flash('error', $throwable->getMessage());
+        }
+
+        redirect($redirectTarget);
+    }
+
     if ($action === 'update_user' && can_manage_users()) {
         $usersQueryRedirect = trim((string) ($_POST['users_q'] ?? ''));
         $redirectTarget = admin_section_url(
@@ -5122,6 +5184,16 @@ $siteOwner = current_user() ?? [];
                             <?php endif; ?>
                             <?php if ($isLastOwner): ?>
                                 <span class="muted admin-user-note"><?= e(t('admin.last_owner_note')) ?></span>
+                            <?php endif; ?>
+                            <?php if (has_owner_access() && !$isCurrentUser && !($memberIsOwner && $isLastOwner)): ?>
+                                <form class="admin-user-delete-form" method="post" action="<?= e(admin_section_url('admin-user-management', $usersQuery !== '' ? ['users_q' => $usersQuery] : [])) ?>">
+                                    <input type="hidden" name="_token" value="<?= e(csrf_token()) ?>">
+                                    <input type="hidden" name="action" value="delete_user">
+                                    <input type="hidden" name="user_id" value="<?= (int) $member['id'] ?>">
+                                    <input type="hidden" name="users_q" value="<?= e($usersQuery) ?>">
+                                    <input type="hidden" name="confirm_username" value="<?= e((string) $member['username']) ?>">
+                                    <button class="button danger hover small" type="submit" data-confirm="<?= e(t('admin.user_delete_confirm', ['user' => (string) $member['username']])) ?>"><?= e(t('admin.delete_user')) ?></button>
+                                </form>
                             <?php endif; ?>
                         </td>
                     </tr>

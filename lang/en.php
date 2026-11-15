@@ -1056,4 +1056,12 @@ return [
     'admin.site_settings_owner_username_taken' => 'That username is already in use.',
     'admin.site_settings_owner_email_taken' => 'That email address is already in use.',
     'admin.site_settings_owner_save_failed' => 'Could not update the owner account.',
+    'admin.delete_user' => 'Delete account',
+    'admin.user_delete_confirm' => 'Permanently delete {user}\'s account? Their comments, badges, and progress will be removed. Their submission history will be kept.',
+    'admin.user_delete_protected' => 'You cannot delete your own account from this page.',
+    'admin.user_delete_not_found' => 'That user account could not be found.',
+    'admin.user_delete_confirmation_mismatch' => 'The confirmation does not match the username.',
+    'admin.user_delete_last_owner' => 'The last owner account cannot be deleted.',
+    'admin.user_delete_failed' => 'Could not delete the user account.',
+    'admin.user_deleted' => 'Deleted {user}\'s account. Their submission history was kept.',
 ];
